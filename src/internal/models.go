@@ -7,9 +7,9 @@ import (
 
 const (
 	MexcWsURl      = "wss://wbs-api.mexc.com/ws"
-	FuturesRestAPI = "https://api.mexc.com/api/v3/defaultSymbols"
+	FuturesRestAPI = "https://contract.mexc.com/api/v1/contract/ticker"
 
-	SplashPercent = 0.005
+	SplashPercent = 0.01
 	Window        = 10 * time.Second
 )
 
@@ -25,10 +25,10 @@ type WsMessage struct {
 }
 
 type Responce struct {
-	Code    int      `json:"code"`
-	Msg     string   `json:"msg"`
-	Data    []string `json:"data"`
-	Success bool     `json:"success"`
+	Code    int          `json:"code"`
+	Msg     string       `json:"msg"`
+	Data    []SplashData `json:"data"`
+	Success bool         `json: "success"`
 }
 type PriceRecord struct {
 	Price float64
@@ -36,9 +36,8 @@ type PriceRecord struct {
 }
 
 type SplashData struct {
-	Symbol string `json:"symbol"`
-	Price  string `json:"p"`
-	Volume string `json:"v"`
-	Time   int64  `json:"t"`
-	Side   string `json:"s"`
+	Symbol    string  `json:"symbol"`
+	LastPrice float64 `json:"lastPrice"`
+	FairPrice float64 `json:"fairPrice"`
+	Volume24  int64   `json:"volume24"`
 }
