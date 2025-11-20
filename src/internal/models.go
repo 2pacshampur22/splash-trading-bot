@@ -10,7 +10,7 @@ const (
 	FuturesRestAPI = "https://contract.mexc.com/api/v1/contract/ticker"
 
 	SplashPercent = 0.01
-	Window        = 10 * time.Second
+	Window        = 3 * time.Minute
 )
 
 type SubMessage struct {

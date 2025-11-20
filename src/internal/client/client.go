@@ -54,13 +54,27 @@ func StartPolling() {
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
 
+	var referenceTime time.Time
+
 	for {
 		select {
 		case <-ticker.C:
+			now := time.Now()
 			newTickers, err := FetchAllFuturesTickers()
 			if err != nil {
 				log.Printf("Polling failed: %v", err)
 				return
+			}
+
+			if previousPrices == nil || now.Sub(referenceTime) >= internal.Window {
+				tempMap := make(map[string]internal.SplashData)
+				for _, ticker := range newTickers {
+					tempMap[ticker.Symbol] = ticker
+				}
+				previousPrices = tempMap
+				referenceTime = now
+				log.Println("Reference prices updated")
+				continue
 			}
 
 			CheckPrices(newTickers)
@@ -94,9 +108,10 @@ func CheckPrices(newTickers []internal.SplashData) {
 						ticker.Symbol, lastPriceChange*100, prevTicker.LastPrice, ticker.LastPrice, ticker.Volume24)
 				}
 				if ticker.FairPrice < prevTicker.FairPrice {
+					log.Printf("SPLASH DETECTED")
 					log.Printf("FAIR PRICE SPLASH DETECTED: %s | Price moved -%.2f%% | Prev: %.6f | Current: %.6f | Volume24h: %v",
-						ticker.Symbol, fairPriceChange*100, prevTicker.FairPrice, ticker.LastPrice, ticker.Volume24)
-					log.Printf("LAST PRICE SPLASH: %s | Price moved +%.2f%% | Prev: %.6f | Current: %.6f | Volume24h: %v",
+						ticker.Symbol, fairPriceChange*100, prevTicker.FairPrice, ticker.FairPrice, ticker.Volume24)
+					log.Printf("LAST PRICE SPLASH: %s | Price moved -%.2f%% | Prev: %.6f | Current: %.6f | Volume24h: %v",
 						ticker.Symbol, lastPriceChange*100, prevTicker.LastPrice, ticker.LastPrice, ticker.Volume24)
 				}
 			}
