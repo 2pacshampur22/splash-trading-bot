@@ -9,15 +9,15 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	internal "splash-trading-bot/lib/models"
+	"splash-trading-bot/lib/models"
 	"syscall"
 	"time"
 )
 
-var tockenState = make(map[string]internal.TickerState)
+var tockenState = make(map[string]models.TickerState)
 
 func GetNextSplash(currentChange float64, currentLevel float64) float64 {
-	for _, level := range internal.SplashLevels {
+	for _, level := range models.SplashLevels {
 		if level > currentLevel && currentChange >= level {
 			return level
 		}
@@ -25,8 +25,8 @@ func GetNextSplash(currentChange float64, currentLevel float64) float64 {
 	return 0
 }
 
-func FetchAllFuturesTickers() ([]internal.SplashData, error) {
-	resp, err := http.Get(internal.FuturesRestAPI)
+func FetchAllFuturesTickers() ([]models.SplashData, error) {
+	resp, err := http.Get(models.FuturesRestAPI)
 	if err != nil {
 		return nil, fmt.Errorf("cant reach API: %w", err)
 	}
@@ -41,7 +41,7 @@ func FetchAllFuturesTickers() ([]internal.SplashData, error) {
 		return nil, fmt.Errorf("cant read responce body: %w", err)
 	}
 
-	var apiResponce internal.Responce
+	var apiResponce models.Responce
 	if err := json.Unmarshal(body, &apiResponce); err != nil {
 		log.Printf("Error decoding JSON: %v. Raw Body: %s", err, string(body))
 		return nil, fmt.Errorf("error decoding JSON responce: %w", err)
@@ -75,10 +75,10 @@ func StartPolling() {
 				return
 			}
 
-			if tockenState == nil || now.Sub(referenceTime) >= internal.Window {
-				newTockenState := make(map[string]internal.TickerState)
+			if tockenState == nil || now.Sub(referenceTime) >= models.Window {
+				newTockenState := make(map[string]models.TickerState)
 				for _, ticker := range newTickers {
-					newTockenState[ticker.Symbol] = internal.TickerState{
+					newTockenState[ticker.Symbol] = models.TickerState{
 						Reference:          ticker,
 						LastTriggeredLevel: 0,
 					}
@@ -98,10 +98,9 @@ func StartPolling() {
 	}
 }
 
-func CheckPrices(newTickers []internal.SplashData, referenceTime time.Time) {
+func CheckPrices(newTickers []models.SplashData, referenceTime time.Time) {
 	splashCount := 0
 	var timeAlert time.Time
-	var direction string
 	for _, ticker := range newTickers {
 
 		state, ok := tockenState[ticker.Symbol]
@@ -118,34 +117,52 @@ func CheckPrices(newTickers []internal.SplashData, referenceTime time.Time) {
 		maxChangeAlert := math.Max(lastPriceChangeRef, fairPriceChangeRef)
 		nextLevel := GetNextSplash(maxChangeAlert, state.LastTriggeredLevel)
 		if nextLevel > 0 {
-
-			if math.Abs(lastPriceChangeRef-fairPriceChangeRef)*100 < 0.5 {
+			if (nextLevel*100 == 3 || nextLevel*100 == 6 || nextLevel*100 == 1) && math.Abs(lastPriceChangeRef-fairPriceChangeRef)*100 < 0.5 {
 				timeAlert = time.Now()
-				if ticker.LastPrice < lastPriceChangeRef && ticker.FairPrice < fairPriceChangeRef {
-					direction = "DOWN"
-				} else {
-					direction = "UP"
-				}
 				splashCount++
-				log.Printf("------------------------------------------")
-				log.Printf("SPLASH DETECTED: %s | Level: %.0f%% %s", ticker.Symbol, nextLevel*100, direction)
-				log.Printf("Total in 3m:")
-				log.Printf("Last Price Change:%.2f%% | Reference Last Price: %.6f | Now last price: %.6f", lastPriceChangeRef*100, previousPrices.LastPrice, ticker.LastPrice)
-				log.Printf("Fair Price Change:%.2f%% | Reference Fair Price: %.6f | Now fair price: %.6f", fairPriceChangeRef*100, previousPrices.FairPrice, ticker.FairPrice)
-				log.Printf("Volume24h: %v", ticker.Volume24)
-				if timeAlert.Sub(referenceTime).Minutes() > 1 {
-					log.Printf("Splash time: %.2f min", timeAlert.Sub(referenceTime).Minutes())
-				} else {
-					log.Printf("Splash time: %.2f sec", timeAlert.Sub(referenceTime).Seconds())
-				}
-				log.Printf("------------------------------------------")
-
-				state.LastTriggeredLevel = nextLevel
-				tockenState[ticker.Symbol] = state
+				SplashHandle(ticker, nextLevel, lastPriceChangeRef, fairPriceChangeRef, previousPrices, referenceTime, state, timeAlert)
+			} else if (nextLevel*100 == 12 || nextLevel*100 == 24) && math.Abs(lastPriceChangeRef-fairPriceChangeRef)*100 < 2.0 {
+				timeAlert = time.Now()
+				splashCount++
+				SplashHandle(ticker, nextLevel, lastPriceChangeRef, fairPriceChangeRef, previousPrices, referenceTime, state, timeAlert)
+			} else if (nextLevel*100 == 48) && math.Abs(lastPriceChangeRef-fairPriceChangeRef)*100 < 10.0 {
+				timeAlert = time.Now()
+				splashCount++
+				SplashHandle(ticker, nextLevel, lastPriceChangeRef, fairPriceChangeRef, previousPrices, referenceTime, state, timeAlert)
+			} else if (nextLevel*100 == 96) && math.Abs(lastPriceChangeRef-fairPriceChangeRef)*100 < 15.0 {
+				timeAlert = time.Now()
+				splashCount++
+				SplashHandle(ticker, nextLevel, lastPriceChangeRef, fairPriceChangeRef, previousPrices, referenceTime, state, timeAlert)
 			}
 		}
 
 	}
 
 	log.Printf("Polling successful. Checked %d symbols. Found %d splashes.", len(newTickers), splashCount)
+}
+
+func SplashHandle(ticker models.SplashData, nextLevel float64, lastPriceChangeRef float64, fairPriceChangeRef float64, previousPrices models.SplashData, referenceTime time.Time, state models.TickerState, timeAlert time.Time) {
+
+	var direction string
+	if ticker.LastPrice < lastPriceChangeRef && ticker.FairPrice < fairPriceChangeRef {
+		direction = "DOWN"
+	} else {
+		direction = "UP"
+	}
+	log.Printf("------------------------------------------")
+	log.Printf("SPLASH DETECTED: %s | Level: %.0f%% %s", ticker.Symbol, nextLevel*100, direction)
+	log.Printf("Total in 3m:")
+	log.Printf("Last Price Change:%.2f%% | Reference Last Price: %.6f | Now last price: %.6f", lastPriceChangeRef*100, previousPrices.LastPrice, ticker.LastPrice)
+	log.Printf("Fair Price Change:%.2f%% | Reference Fair Price: %.6f | Now fair price: %.6f", fairPriceChangeRef*100, previousPrices.FairPrice, ticker.FairPrice)
+	log.Printf("Volume24h: %v", ticker.Volume24)
+	if timeAlert.Sub(referenceTime).Minutes() > 1 {
+		log.Printf("Splash time: %.2f min", timeAlert.Sub(referenceTime).Minutes())
+	} else {
+		log.Printf("Splash time: %.2f sec", timeAlert.Sub(referenceTime).Seconds())
+	}
+	log.Printf("------------------------------------------")
+
+	state.LastTriggeredLevel = nextLevel
+	tockenState[ticker.Symbol] = state
+
 }
