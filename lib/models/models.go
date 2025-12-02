@@ -1,27 +1,22 @@
-package internal
+package models
 
 import (
-	"encoding/json"
 	"time"
 )
 
 const (
-	MexcWsURl      = "wss://wbs-api.mexc.com/ws"
 	FuturesRestAPI = "https://contract.mexc.com/api/v1/contract/ticker"
-
-	SplashPercent = 0.01
-	Window        = 3 * time.Minute
+	Window         = 5 * time.Minute
 )
 
-type SubMessage struct {
-	Method string   `json:"method"`
-	Params []string `json:"params"`
-}
-
-type WsMessage struct {
-	Channel string          `json:"channel"`
-	Code    int             `json:"code"`
-	Data    json.RawMessage `json:"data"`
+var SplashLevels = []float64{
+	0.01,
+	0.03,
+	0.06,
+	0.12,
+	0.24,
+	0.48,
+	0.96,
 }
 
 type Responce struct {
@@ -40,4 +35,9 @@ type SplashData struct {
 	LastPrice float64 `json:"lastPrice"`
 	FairPrice float64 `json:"fairPrice"`
 	Volume24  int64   `json:"volume24"`
+}
+
+type TickerState struct {
+	Reference          SplashData
+	LastTriggeredLevel float64
 }

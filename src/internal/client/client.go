@@ -9,12 +9,21 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"splash-trading-bot/src/internal"
+	internal "splash-trading-bot/lib/models"
 	"syscall"
 	"time"
 )
 
-var previousPrices = make(map[string]internal.SplashData)
+var tockenState = make(map[string]internal.TickerState)
+
+func GetNextSplash(currentChange float64, currentLevel float64) float64 {
+	for _, level := range internal.SplashLevels {
+		if level > currentLevel && currentChange >= level {
+			return level
+		}
+	}
+	return 0
+}
 
 func FetchAllFuturesTickers() ([]internal.SplashData, error) {
 	resp, err := http.Get(internal.FuturesRestAPI)
@@ -66,18 +75,21 @@ func StartPolling() {
 				return
 			}
 
-			if previousPrices == nil || now.Sub(referenceTime) >= internal.Window {
-				tempMap := make(map[string]internal.SplashData)
+			if tockenState == nil || now.Sub(referenceTime) >= internal.Window {
+				newTockenState := make(map[string]internal.TickerState)
 				for _, ticker := range newTickers {
-					tempMap[ticker.Symbol] = ticker
+					newTockenState[ticker.Symbol] = internal.TickerState{
+						Reference:          ticker,
+						LastTriggeredLevel: 0,
+					}
 				}
-				previousPrices = tempMap
+				tockenState = newTockenState
 				referenceTime = now
 				log.Println("Reference prices updated")
 				continue
 			}
 
-			CheckPrices(newTickers)
+			CheckPrices(newTickers, referenceTime)
 
 		case <-interrupt:
 			log.Println("Got interrupt signal, stopping parser.")
@@ -86,39 +98,53 @@ func StartPolling() {
 	}
 }
 
-func CheckPrices(newTickers []internal.SplashData) {
+func CheckPrices(newTickers []internal.SplashData, referenceTime time.Time) {
 	splashCount := 0
+	var timeAlert time.Time
+	var direction string
 	for _, ticker := range newTickers {
-		if prevTicker, ok := previousPrices[ticker.Symbol]; ok {
 
-			if ticker.LastPrice == 0 || ticker.FairPrice == 0 {
-				previousPrices[ticker.Symbol] = ticker
-				continue
-			}
+		state, ok := tockenState[ticker.Symbol]
+		if !ok {
+			continue
+		}
+		previousPrices := state.Reference
+		if ticker.LastPrice == 0 || ticker.FairPrice == 0 {
+			continue
+		}
+		lastPriceChangeRef := math.Abs(ticker.LastPrice-previousPrices.LastPrice) / previousPrices.LastPrice
+		fairPriceChangeRef := math.Abs(ticker.FairPrice-previousPrices.FairPrice) / previousPrices.FairPrice
 
-			lastPriceChange := math.Abs(ticker.LastPrice-prevTicker.LastPrice) / prevTicker.LastPrice
-			fairPriceChange := math.Abs(ticker.FairPrice-prevTicker.FairPrice) / prevTicker.FairPrice
-			if fairPriceChange >= internal.SplashPercent && lastPriceChange >= internal.SplashPercent {
+		maxChangeAlert := math.Max(lastPriceChangeRef, fairPriceChangeRef)
+		nextLevel := GetNextSplash(maxChangeAlert, state.LastTriggeredLevel)
+		if nextLevel > 0 {
+
+			if math.Abs(lastPriceChangeRef-fairPriceChangeRef)*100 < 0.5 {
+				timeAlert = time.Now()
+				if ticker.LastPrice < lastPriceChangeRef && ticker.FairPrice < fairPriceChangeRef {
+					direction = "DOWN"
+				} else {
+					direction = "UP"
+				}
 				splashCount++
-				if ticker.FairPrice > prevTicker.FairPrice && ticker.LastPrice > prevTicker.LastPrice {
-					log.Printf("SPLASH DETECTED")
-					log.Printf("FAIR PRICE SPLASH: %s | Price moved +%.2f%% | Prev: %.6f | Current: %.6f | Volume24h: %v",
-						ticker.Symbol, fairPriceChange*100, prevTicker.FairPrice, ticker.FairPrice, ticker.Volume24)
-					log.Printf("LAST PRICE SPLASH: %s | Price moved +%.2f%% | Prev: %.6f | Current: %.6f | Volume24h: %v",
-						ticker.Symbol, lastPriceChange*100, prevTicker.LastPrice, ticker.LastPrice, ticker.Volume24)
+				log.Printf("------------------------------------------")
+				log.Printf("SPLASH DETECTED: %s | Level: %.0f%% %s", ticker.Symbol, nextLevel*100, direction)
+				log.Printf("Total in 3m:")
+				log.Printf("Last Price Change:%.2f%% | Reference Last Price: %.6f | Now last price: %.6f", lastPriceChangeRef*100, previousPrices.LastPrice, ticker.LastPrice)
+				log.Printf("Fair Price Change:%.2f%% | Reference Fair Price: %.6f | Now fair price: %.6f", fairPriceChangeRef*100, previousPrices.FairPrice, ticker.FairPrice)
+				log.Printf("Volume24h: %v", ticker.Volume24)
+				if timeAlert.Sub(referenceTime).Minutes() > 1 {
+					log.Printf("Splash time: %.2f min", timeAlert.Sub(referenceTime).Minutes())
+				} else {
+					log.Printf("Splash time: %.2f sec", timeAlert.Sub(referenceTime).Seconds())
 				}
-				if ticker.FairPrice < prevTicker.FairPrice {
-					log.Printf("SPLASH DETECTED")
-					log.Printf("FAIR PRICE SPLASH DETECTED: %s | Price moved -%.2f%% | Prev: %.6f | Current: %.6f | Volume24h: %v",
-						ticker.Symbol, fairPriceChange*100, prevTicker.FairPrice, ticker.FairPrice, ticker.Volume24)
-					log.Printf("LAST PRICE SPLASH: %s | Price moved -%.2f%% | Prev: %.6f | Current: %.6f | Volume24h: %v",
-						ticker.Symbol, lastPriceChange*100, prevTicker.LastPrice, ticker.LastPrice, ticker.Volume24)
-				}
-			}
+				log.Printf("------------------------------------------")
 
+				state.LastTriggeredLevel = nextLevel
+				tockenState[ticker.Symbol] = state
+			}
 		}
 
-		previousPrices[ticker.Symbol] = ticker
 	}
 
 	log.Printf("Polling successful. Checked %d symbols. Found %d splashes.", len(newTickers), splashCount)
