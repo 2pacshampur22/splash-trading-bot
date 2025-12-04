@@ -2,7 +2,7 @@ package main
 
 import (
 	"log"
-	"splash-trading-bot/src/internal/client"
+	"splash-trading-bot/src/client"
 )
 
 func main() {
@@ -10,5 +10,4 @@ func main() {
 	log.Println("Starting Splash-parser")
 	client.StartPolling()
 	log.Println("Parser Stopped")
-
 }

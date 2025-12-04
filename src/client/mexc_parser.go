@@ -10,11 +10,15 @@ import (
 	"os"
 	"os/signal"
 	"splash-trading-bot/lib/models"
+	"sync"
 	"syscall"
 	"time"
 )
 
-var tockenState = make(map[string]models.TickerState)
+var TockenState = &models.SharedState{
+	Mu:           sync.Mutex{},
+	TickerStates: make(map[string]models.TickerState),
+}
 
 func GetNextSplash(currentChange float64, currentLevel float64) float64 {
 	for _, level := range models.SplashLevels {
@@ -74,20 +78,28 @@ func StartPolling() {
 				log.Printf("Polling failed: %v", err)
 				return
 			}
+			TockenState.Mu.Lock()
 
-			if tockenState == nil || now.Sub(referenceTime) >= models.Window {
+			if TockenState == nil || now.Sub(referenceTime) >= models.Window {
 				newTockenState := make(map[string]models.TickerState)
 				for _, ticker := range newTickers {
+					if ticker.LastPrice == 0 || ticker.FairPrice == 0 {
+						continue
+					}
 					newTockenState[ticker.Symbol] = models.TickerState{
-						Reference:          ticker,
+						WindowStartRef:     ticker,
+						LatestTickerData:   ticker,
 						LastTriggeredLevel: 0,
 					}
 				}
-				tockenState = newTockenState
+				TockenState.TickerStates = newTockenState
 				referenceTime = now
 				log.Println("Reference prices updated")
+
+				TockenState.Mu.Unlock()
 				continue
 			}
+			TockenState.Mu.Unlock()
 
 			CheckPrices(newTickers, referenceTime)
 
@@ -103,36 +115,47 @@ func CheckPrices(newTickers []models.SplashData, referenceTime time.Time) {
 	var timeAlert time.Time
 	for _, ticker := range newTickers {
 
-		state, ok := tockenState[ticker.Symbol]
+		TockenState.Mu.Lock()
+
+		state, ok := TockenState.TickerStates[ticker.Symbol]
+		if ok {
+			state.WindowStartRef = ticker
+			TockenState.TickerStates[ticker.Symbol] = state
+		}
+		TockenState.Mu.Unlock()
+
 		if !ok {
 			continue
 		}
-		previousPrices := state.Reference
+
+		previousPrices := state.LatestTickerData
 		if ticker.LastPrice == 0 || ticker.FairPrice == 0 {
 			continue
 		}
 		lastPriceChangeRef := math.Abs(ticker.LastPrice-previousPrices.LastPrice) / previousPrices.LastPrice
 		fairPriceChangeRef := math.Abs(ticker.FairPrice-previousPrices.FairPrice) / previousPrices.FairPrice
-
 		maxChangeAlert := math.Max(lastPriceChangeRef, fairPriceChangeRef)
+
 		nextLevel := GetNextSplash(maxChangeAlert, state.LastTriggeredLevel)
 		if nextLevel > 0 {
-			if (nextLevel*100 == 3 || nextLevel*100 == 6 || nextLevel*100 == 1) && math.Abs(lastPriceChangeRef-fairPriceChangeRef)*100 < 0.5 {
+			switch {
+			case (nextLevel*100 == 3 || nextLevel*100 == 6 || nextLevel*100 == 1) && math.Abs(lastPriceChangeRef-fairPriceChangeRef)*100 < 0.5:
 				timeAlert = time.Now()
 				splashCount++
 				SplashHandle(ticker, nextLevel, lastPriceChangeRef, fairPriceChangeRef, previousPrices, referenceTime, state, timeAlert)
-			} else if (nextLevel*100 == 12 || nextLevel*100 == 24) && math.Abs(lastPriceChangeRef-fairPriceChangeRef)*100 < 2.0 {
+			case (nextLevel*100 == 12 || nextLevel*100 == 24) && math.Abs(lastPriceChangeRef-fairPriceChangeRef)*100 < 2.0:
 				timeAlert = time.Now()
 				splashCount++
 				SplashHandle(ticker, nextLevel, lastPriceChangeRef, fairPriceChangeRef, previousPrices, referenceTime, state, timeAlert)
-			} else if (nextLevel*100 == 48) && math.Abs(lastPriceChangeRef-fairPriceChangeRef)*100 < 10.0 {
+			case (nextLevel*100 == 48) && math.Abs(lastPriceChangeRef-fairPriceChangeRef)*100 < 10.0:
 				timeAlert = time.Now()
 				splashCount++
 				SplashHandle(ticker, nextLevel, lastPriceChangeRef, fairPriceChangeRef, previousPrices, referenceTime, state, timeAlert)
-			} else if (nextLevel*100 == 96) && math.Abs(lastPriceChangeRef-fairPriceChangeRef)*100 < 15.0 {
+			case (nextLevel*100 == 96) && math.Abs(lastPriceChangeRef-fairPriceChangeRef)*100 < 15.0:
 				timeAlert = time.Now()
 				splashCount++
 				SplashHandle(ticker, nextLevel, lastPriceChangeRef, fairPriceChangeRef, previousPrices, referenceTime, state, timeAlert)
+
 			}
 		}
 
@@ -144,7 +167,7 @@ func CheckPrices(newTickers []models.SplashData, referenceTime time.Time) {
 func SplashHandle(ticker models.SplashData, nextLevel float64, lastPriceChangeRef float64, fairPriceChangeRef float64, previousPrices models.SplashData, referenceTime time.Time, state models.TickerState, timeAlert time.Time) {
 
 	var direction string
-	if ticker.LastPrice < lastPriceChangeRef && ticker.FairPrice < fairPriceChangeRef {
+	if ticker.LastPrice < previousPrices.LastPrice && ticker.FairPrice < previousPrices.FairPrice {
 		direction = "DOWN"
 	} else {
 		direction = "UP"
@@ -162,7 +185,26 @@ func SplashHandle(ticker models.SplashData, nextLevel float64, lastPriceChangeRe
 	}
 	log.Printf("------------------------------------------")
 
+	TockenState.Mu.Lock()
+	defer TockenState.Mu.Unlock()
 	state.LastTriggeredLevel = nextLevel
-	tockenState[ticker.Symbol] = state
+
+	if !state.SplashTrigger {
+		state.SplashTrigger = true
+		state.TriggerTime = timeAlert
+		state.SplashDirection = direction
+		state.WindowStartRef.FairPrice = previousPrices.FairPrice
+		state.WindowStartRef.LastPrice = previousPrices.LastPrice
+
+		go TrackReturnBack(
+			ticker.Symbol,
+			previousPrices.LastPrice,
+			previousPrices.FairPrice,
+			state.TriggerTime,
+			state.SplashDirection,
+		)
+	}
+
+	TockenState.TickerStates[ticker.Symbol] = state
 
 }

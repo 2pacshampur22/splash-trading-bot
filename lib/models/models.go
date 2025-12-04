@@ -1,12 +1,14 @@
 package models
 
 import (
+	"sync"
 	"time"
 )
 
 const (
-	FuturesRestAPI = "https://contract.mexc.com/api/v1/contract/ticker"
-	Window         = 5 * time.Minute
+	FuturesRestAPI  = "https://contract.mexc.com/api/v1/contract/ticker"
+	Window          = 5 * time.Minute
+	ReturnTolerance = 0.005
 )
 
 var SplashLevels = []float64{
@@ -38,6 +40,17 @@ type SplashData struct {
 }
 
 type TickerState struct {
-	Reference          SplashData
+	WindowStartRef     SplashData
+	LatestTickerData   SplashData
 	LastTriggeredLevel float64
+	SplashTrigger      bool
+	TriggerTime        time.Time
+	SplashDirection    string
+
+	UpdateChan chan SplashData
+}
+
+type SharedState struct {
+	TickerStates map[string]TickerState
+	Mu           sync.Mutex
 }
