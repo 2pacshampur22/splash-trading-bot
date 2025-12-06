@@ -64,7 +64,7 @@ func StartPolling() {
 
 	log.Println("Starting REST Polling...")
 
-	ticker := time.NewTicker(10 * time.Millisecond)
+	ticker := time.NewTicker(50 * time.Millisecond)
 	defer ticker.Stop()
 
 	var referenceTime time.Time
@@ -118,18 +118,25 @@ func CheckPrices(newTickers []models.SplashData, referenceTime time.Time) {
 		TockenState.Mu.Lock()
 
 		state, ok := TockenState.TickerStates[ticker.Symbol]
-		if ok {
-			state.WindowStartRef = ticker
-			TockenState.TickerStates[ticker.Symbol] = state
-		}
-		TockenState.Mu.Unlock()
 
 		if !ok {
+			TockenState.Mu.Unlock()
 			continue
 		}
 
-		previousPrices := state.LatestTickerData
+		previousPrices := state.WindowStartRef
+		state.LatestTickerData = ticker
+		TockenState.TickerStates[ticker.Symbol] = state
+		if previousPrices.LastPrice == 0 || previousPrices.FairPrice == 0 {
+			state.LatestTickerData = ticker
+			TockenState.TickerStates[ticker.Symbol] = state
+			TockenState.Mu.Unlock()
+			continue
+		}
 		if ticker.LastPrice == 0 || ticker.FairPrice == 0 {
+			state.LatestTickerData = ticker
+			TockenState.TickerStates[ticker.Symbol] = state
+			TockenState.Mu.Unlock()
 			continue
 		}
 		lastPriceChangeRef := math.Abs(ticker.LastPrice-previousPrices.LastPrice) / previousPrices.LastPrice
@@ -138,6 +145,7 @@ func CheckPrices(newTickers []models.SplashData, referenceTime time.Time) {
 
 		nextLevel := GetNextSplash(maxChangeAlert, state.LastTriggeredLevel)
 		if nextLevel > 0 {
+			TockenState.Mu.Unlock()
 			switch {
 			case (nextLevel*100 == 3 || nextLevel*100 == 6 || nextLevel*100 == 1) && math.Abs(lastPriceChangeRef-fairPriceChangeRef)*100 < 0.5:
 				timeAlert = time.Now()
@@ -157,7 +165,9 @@ func CheckPrices(newTickers []models.SplashData, referenceTime time.Time) {
 				SplashHandle(ticker, nextLevel, lastPriceChangeRef, fairPriceChangeRef, previousPrices, referenceTime, state, timeAlert)
 
 			}
+			continue
 		}
+		TockenState.Mu.Unlock()
 
 	}
 
@@ -193,8 +203,6 @@ func SplashHandle(ticker models.SplashData, nextLevel float64, lastPriceChangeRe
 		state.SplashTrigger = true
 		state.TriggerTime = timeAlert
 		state.SplashDirection = direction
-		state.WindowStartRef.FairPrice = previousPrices.FairPrice
-		state.WindowStartRef.LastPrice = previousPrices.LastPrice
 
 		go TrackReturnBack(
 			ticker.Symbol,
