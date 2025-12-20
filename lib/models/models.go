@@ -9,6 +9,7 @@ const (
 	FuturesRestAPI  = "https://contract.mexc.com/api/v1/contract/ticker"
 	Window          = 5 * time.Minute
 	ReturnTolerance = 0.005
+	MaxReturnWindow = 30 * time.Minute
 )
 
 var SplashLevels = []float64{
@@ -64,6 +65,7 @@ type TickerState struct {
 	SplashTrigger      bool
 	TriggerTime        time.Time
 	SplashDirection    string
+	SplashRecordID     int64
 
 	UpdateChan chan SplashData
 }

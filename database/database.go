@@ -6,13 +6,15 @@ import (
 	"log"
 	"splash-trading-bot/lib/models"
 	"time"
+
+	_ "github.com/lib/pq"
 )
 
 var DB *sql.DB
 
 func InitDatabase(dataSourceName string) error {
 	var err error
-	DB, err = sql.Open("postgresql", dataSourceName)
+	DB, err = sql.Open("postgres", dataSourceName)
 	if err != nil {
 		return fmt.Errorf("failed to open database connection: %w", err)
 	}
@@ -28,23 +30,18 @@ func InitDatabase(dataSourceName string) error {
 		id serial primary key,
 		symbol varchar(30) not null,
 		direction varchar(4) not null,
-
 		trigger_level smallint not null,
 		ref_last_price real not null,
 		ref_fair_price real not null,
-
 		trigger_last_price float8 not null,
 		trigger_fair_price float8 not null,
-
 		trigger_time timestamp with time zone not null,
-		volume_24h float8 not null,
-
+		volume_24h int not null,
 		returned boolean default false,
-		return_time int default 0,
-		max_deviation smallint default 0,
-
-		long_probability smallint default 0,
-		short_probability smallint default 0
+		return_time float8 default 0,
+		max_deviation float8 default 0,
+		long_probability float8 default 0,
+		short_probability float8 default 0
 	);`
 
 	_, err = DB.Exec(createTablePSQL)
@@ -52,8 +49,21 @@ func InitDatabase(dataSourceName string) error {
 		return fmt.Errorf("failed to create splash_records table: %w", err)
 	}
 
-	log.Println("splash_records table is ready")
+	var exists bool
+	checkQuery := `SELECT EXISTS (
+		SELECT FROM information_schema.tables 
+		WHERE table_schema = 'public' 
+		AND table_name = 'splash_records'
+	);`
 
+	err = DB.QueryRow(checkQuery).Scan(&exists)
+	if err != nil {
+		log.Printf("Warning: Could not verify table existence: %v", err)
+	} else if exists {
+		log.Println("Verification successful: Table 'splash_records' exists in the database.")
+	} else {
+		log.Println("Alert: Table was NOT created even though no error was returned.")
+	}
 	return nil
 }
 
@@ -69,6 +79,7 @@ func SaveSplashRecord(r models.SplashRecord) (int64, error) {
 	) values (
 	 $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
 	) RETURNING id;`
+
 	var id int64
 	err := DB.QueryRow(
 		insertPSQL,
@@ -120,6 +131,26 @@ func UpdateSplashRecord(r models.SplashRecord) error {
 	return nil
 }
 
+func UpdateSplashLevel(id int64, level int, lastPrice float64, fairPrice float64, volume24 int64) error {
+	updatePSQL := `
+	update splash_records
+	set trigger_level = $1,
+		trigger_last_price = $2,
+		trigger_fair_price = $3,
+		volume_24h = $4
+	where id = $5;`
+
+	_, err := DB.Exec(
+		updatePSQL,
+		level,
+		lastPrice,
+		fairPrice,
+		volume24,
+		id,
+	)
+	return err
+}
+
 func GetSplashRecordByID(id int64) (models.SplashRecord, error) {
 	queryPSQL := `
 	select 
@@ -130,6 +161,7 @@ func GetSplashRecordByID(id int64) (models.SplashRecord, error) {
 		returned, return_time, max_deviation,
 		long_probability, short_probability
 	from splash_records where id = $1;`
+
 	r := models.SplashRecord{}
 	var returnTime int64
 
@@ -155,6 +187,7 @@ func GetSplashRecordByID(id int64) (models.SplashRecord, error) {
 }
 
 func GetHistoricalSplashRecords(symbol string, level float64) ([]models.SplashRecord, error) {
+
 	queryPSQL := `
 	select 
 		id, symbol, direction,

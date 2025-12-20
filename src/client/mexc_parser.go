@@ -21,13 +21,14 @@ var TockenState = &models.SharedState{
 	TickerStates: make(map[string]models.TickerState),
 }
 
-func GetNextSplash(currentChange float64, currentLevel float64) float64 {
+func GetNextSplash(currentChange float64, lastTriggeredLevel float64) float64 {
+	maxLevel := 0.0
 	for _, level := range models.SplashLevels {
-		if level > currentLevel && currentChange >= level {
-			return level
+		if level > lastTriggeredLevel && currentChange >= level {
+			maxLevel = level
 		}
 	}
-	return 0
+	return maxLevel
 }
 
 func FetchAllFuturesTickers() ([]models.SplashData, error) {
@@ -60,7 +61,7 @@ func FetchAllFuturesTickers() ([]models.SplashData, error) {
 }
 
 func StartPolling() {
-	const postgresConnString = "host=localhost port=5432 user=postgres password=10072005Egor! dbname=splashtradingbot sslmode=disable"
+	const postgresConnString = "host=localhost port=5432 user=postgres password=10072005Egor dbname=splashtradingbot sslmode=disable"
 	err := database.InitDatabase(postgresConnString)
 	if err != nil {
 		log.Fatalf("Failed to initialize database: %v", err)
@@ -153,7 +154,7 @@ func CheckPrices(newTickers []models.SplashData, referenceTime time.Time) {
 		if nextLevel > 0 {
 			TockenState.Mu.Unlock()
 			switch {
-			case (nextLevel*100 == 3 || nextLevel*100 == 5 || nextLevel*100 == 1):
+			case (nextLevel*100 == 1 || nextLevel*100 == 3 || nextLevel*100 == 5):
 				timeAlert = time.Now()
 				splashCount++
 				SplashHandle(ticker, nextLevel, lastPriceChangeRef, fairPriceChangeRef, previousPrices, referenceTime, state, timeAlert)
@@ -169,7 +170,8 @@ func CheckPrices(newTickers []models.SplashData, referenceTime time.Time) {
 				timeAlert = time.Now()
 				splashCount++
 				SplashHandle(ticker, nextLevel, lastPriceChangeRef, fairPriceChangeRef, previousPrices, referenceTime, state, timeAlert)
-
+			default:
+				continue
 			}
 			continue
 		}
@@ -202,22 +204,62 @@ func SplashHandle(ticker models.SplashData, nextLevel float64, lastPriceChangeRe
 
 	TockenState.Mu.Lock()
 	defer TockenState.Mu.Unlock()
-	state.LastTriggeredLevel = nextLevel
 
-	if !state.SplashTrigger {
-		state.SplashTrigger = true
-		state.TriggerTime = timeAlert
-		state.SplashDirection = direction
-
-		go TrackReturnBack(
-			ticker.Symbol,
-			previousPrices.LastPrice,
-			previousPrices.FairPrice,
-			state.TriggerTime,
-			state.SplashDirection,
-		)
+	if state.SplashTrigger {
+		if direction == "UP" && nextLevel > state.LastTriggeredLevel {
+			err := database.UpdateSplashLevel(state.SplashRecordID, int(nextLevel*100), ticker.LastPrice, ticker.FairPrice, ticker.Volume24)
+			if err != nil {
+				log.Printf("Error updating splash record in database: %v", err)
+				return
+			}
+			state.LastTriggeredLevel = nextLevel
+			TockenState.TickerStates[ticker.Symbol] = state
+			log.Printf("%s UP PROGRESSION: Level %.0f%% | LAST PRICE: %.6f | FAIR PRICE %.6f | Volume: %d", ticker.Symbol, nextLevel*100, ticker.LastPrice, ticker.FairPrice, ticker.Volume24)
+			return
+		} else if direction == "DOWN" && nextLevel > state.LastTriggeredLevel {
+			err := database.UpdateSplashLevel(state.SplashRecordID, int(nextLevel*100), ticker.LastPrice, ticker.FairPrice, ticker.Volume24)
+			if err != nil {
+				log.Printf("Error updating splash record in database: %v", err)
+				return
+			}
+			state.LastTriggeredLevel = nextLevel
+			TockenState.TickerStates[ticker.Symbol] = state
+			log.Printf("%s DOWN PROGRESSION: Level %.0f%% | LAST PRICE: %.6f | FAIR PRICE %.6f | Volume: %d", ticker.Symbol, nextLevel*100, ticker.LastPrice, ticker.FairPrice, ticker.Volume24)
+			return
+		}
+		return
+	}
+	record := models.SplashRecord{
+		Symbol:           ticker.Symbol,
+		Direction:        direction,
+		TriggerLevel:     int(nextLevel * 100),
+		RefLastPrice:     previousPrices.LastPrice,
+		RefFairPrice:     previousPrices.FairPrice,
+		TriggerLastPrice: ticker.LastPrice,
+		TriggerFairPrice: ticker.FairPrice,
+		TriggerTime:      timeAlert,
+		Volume24h:        ticker.Volume24,
 	}
 
+	recordID, err := database.SaveSplashRecord(record)
+	if err != nil {
+		log.Printf("Error saving splash record to database: %v", err)
+		return
+	}
+	state.LastTriggeredLevel = nextLevel
+	state.SplashTrigger = true
+	state.TriggerTime = timeAlert
+	state.SplashDirection = direction
+	state.SplashRecordID = recordID
+
 	TockenState.TickerStates[ticker.Symbol] = state
+	go TrackReturnBack(
+		recordID,
+		ticker.Symbol,
+		previousPrices.LastPrice,
+		previousPrices.FairPrice,
+		state.TriggerTime,
+		state.SplashDirection,
+	)
 
 }
