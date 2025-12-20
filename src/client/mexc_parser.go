@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"splash-trading-bot/database"
 	"splash-trading-bot/lib/models"
 	"sync"
 	"syscall"
@@ -59,6 +60,11 @@ func FetchAllFuturesTickers() ([]models.SplashData, error) {
 }
 
 func StartPolling() {
+	const postgresConnString = "host=localhost port=5432 user=postgres password=10072005Egor! dbname=splashtradingbot sslmode=disable"
+	err := database.InitDatabase(postgresConnString)
+	if err != nil {
+		log.Fatalf("Failed to initialize database: %v", err)
+	}
 	interrupt := make(chan os.Signal, 1)
 	signal.Notify(interrupt, syscall.SIGINT, syscall.SIGTERM)
 
@@ -147,7 +153,7 @@ func CheckPrices(newTickers []models.SplashData, referenceTime time.Time) {
 		if nextLevel > 0 {
 			TockenState.Mu.Unlock()
 			switch {
-			case (nextLevel*100 == 3 || nextLevel*100 == 6 || nextLevel*100 == 1) && math.Abs(lastPriceChangeRef-fairPriceChangeRef)*100 < 0.5:
+			case (nextLevel*100 == 3 || nextLevel*100 == 5 || nextLevel*100 == 1):
 				timeAlert = time.Now()
 				splashCount++
 				SplashHandle(ticker, nextLevel, lastPriceChangeRef, fairPriceChangeRef, previousPrices, referenceTime, state, timeAlert)
@@ -171,7 +177,6 @@ func CheckPrices(newTickers []models.SplashData, referenceTime time.Time) {
 
 	}
 
-	log.Printf("Polling successful. Checked %d symbols. Found %d splashes.", len(newTickers), splashCount)
 }
 
 func SplashHandle(ticker models.SplashData, nextLevel float64, lastPriceChangeRef float64, fairPriceChangeRef float64, previousPrices models.SplashData, referenceTime time.Time, state models.TickerState, timeAlert time.Time) {

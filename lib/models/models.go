@@ -14,7 +14,7 @@ const (
 var SplashLevels = []float64{
 	0.01,
 	0.03,
-	0.06,
+	0.05,
 	0.12,
 	0.24,
 	0.48,
@@ -37,6 +37,24 @@ type SplashData struct {
 	LastPrice float64 `json:"lastPrice"`
 	FairPrice float64 `json:"fairPrice"`
 	Volume24  int64   `json:"volume24"`
+}
+
+type SplashRecord struct {
+	ID               int
+	Symbol           string
+	Direction        string
+	TriggerLevel     int
+	RefLastPrice     float64
+	RefFairPrice     float64
+	TriggerLastPrice float64
+	TriggerFairPrice float64
+	TriggerTime      time.Time
+	Volume24h        int64
+	Returned         bool
+	ReturnTime       time.Duration
+	MaxDeviation     float64
+	LongProbability  float64
+	ShortProbability float64
 }
 
 type TickerState struct {
