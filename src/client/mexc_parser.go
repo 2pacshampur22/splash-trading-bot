@@ -118,12 +118,8 @@ func StartPolling() {
 }
 
 func CheckPrices(newTickers []models.SplashData, referenceTime time.Time) {
-	splashCount := 0
-	var timeAlert time.Time
 	for _, ticker := range newTickers {
-
 		TockenState.Mu.Lock()
-
 		state, ok := TockenState.TickerStates[ticker.Symbol]
 
 		if !ok {
@@ -153,61 +149,75 @@ func CheckPrices(newTickers []models.SplashData, referenceTime time.Time) {
 		nextLevel := GetNextSplash(maxChangeAlert, state.LastTriggeredLevel)
 		if nextLevel > 0 {
 			TockenState.Mu.Unlock()
+			levelRound := math.Round(nextLevel * 100)
+			valid := false
 			switch {
-			case (nextLevel*100 == 1 || nextLevel*100 == 3 || nextLevel*100 == 5):
-				timeAlert = time.Now()
-				splashCount++
-				SplashHandle(ticker, nextLevel, lastPriceChangeRef, fairPriceChangeRef, previousPrices, referenceTime, state, timeAlert)
-			case (nextLevel*100 == 12 || nextLevel*100 == 24) && math.Abs(lastPriceChangeRef-fairPriceChangeRef)*100 < 2.0:
-				timeAlert = time.Now()
-				splashCount++
-				SplashHandle(ticker, nextLevel, lastPriceChangeRef, fairPriceChangeRef, previousPrices, referenceTime, state, timeAlert)
-			case (nextLevel*100 == 48) && math.Abs(lastPriceChangeRef-fairPriceChangeRef)*100 < 10.0:
-				timeAlert = time.Now()
-				splashCount++
-				SplashHandle(ticker, nextLevel, lastPriceChangeRef, fairPriceChangeRef, previousPrices, referenceTime, state, timeAlert)
-			case (nextLevel*100 == 96) && math.Abs(lastPriceChangeRef-fairPriceChangeRef)*100 < 15.0:
-				timeAlert = time.Now()
-				splashCount++
-				SplashHandle(ticker, nextLevel, lastPriceChangeRef, fairPriceChangeRef, previousPrices, referenceTime, state, timeAlert)
-			default:
+			case levelRound == 1 || levelRound == 3 || levelRound == 5:
+				valid = true
+			case (levelRound == 12 || levelRound == 24) && math.Abs(lastPriceChangeRef-fairPriceChangeRef)*100 < 2.0:
+				valid = true
+			case (levelRound == 48) && math.Abs(lastPriceChangeRef-fairPriceChangeRef)*100 < 10.0:
+				valid = true
+			case (levelRound == 96) && math.Abs(lastPriceChangeRef-fairPriceChangeRef)*100 < 15.0:
+				valid = true
+			}
+			if valid {
+				SplashHandle(ticker, nextLevel, lastPriceChangeRef, fairPriceChangeRef, previousPrices, referenceTime, state)
 				continue
 			}
-			continue
 		}
+
+		state.LatestTickerData = ticker
+		TockenState.TickerStates[ticker.Symbol] = state
 		TockenState.Mu.Unlock()
 
 	}
 
 }
 
-func SplashHandle(ticker models.SplashData, nextLevel float64, lastPriceChangeRef float64, fairPriceChangeRef float64, previousPrices models.SplashData, referenceTime time.Time, state models.TickerState, timeAlert time.Time) {
+func SplashHandle(ticker models.SplashData, nextLevel float64, lastPriceChangeRef float64, fairPriceChangeRef float64, previousPrices models.SplashData, referenceTime time.Time, state models.TickerState) {
+	defer TockenState.Mu.Unlock()
 
+	now := time.Now()
+	basisGap := (math.Abs(ticker.LastPrice-ticker.FairPrice) / ticker.FairPrice) * 100
+	var speedSeconds float64
+	if state.SplashTrigger && !state.TriggerTime.IsZero() {
+		speedSeconds = now.Sub(state.TriggerTime).Seconds()
+	} else {
+		speedSeconds = now.Sub(referenceTime).Seconds()
+	}
 	var direction string
 	if ticker.LastPrice < previousPrices.LastPrice && ticker.FairPrice < previousPrices.FairPrice {
 		direction = "DOWN"
 	} else {
 		direction = "UP"
 	}
+
+	total, wins, err := database.GetContextStats(direction, int(nextLevel*100), ticker.Volume24, basisGap)
+	probability := -1.0
+	if err == nil && total >= 3 {
+		probability = (float64(wins) / float64(total)) * 100
+	}
+
 	log.Printf("------------------------------------------")
 	log.Printf("SPLASH DETECTED: %s | Level: %.0f%% %s", ticker.Symbol, nextLevel*100, direction)
 	log.Printf("Total in 3m:")
 	log.Printf("Last Price Change:%.2f%% | Reference Last Price: %.6f | Now last price: %.6f", lastPriceChangeRef*100, previousPrices.LastPrice, ticker.LastPrice)
 	log.Printf("Fair Price Change:%.2f%% | Reference Fair Price: %.6f | Now fair price: %.6f", fairPriceChangeRef*100, previousPrices.FairPrice, ticker.FairPrice)
 	log.Printf("Volume24h: %v", ticker.Volume24)
-	if timeAlert.Sub(referenceTime).Minutes() > 1 {
-		log.Printf("Splash time: %.2f min", timeAlert.Sub(referenceTime).Minutes())
+	log.Printf("Gap: %.2f%% | Speed: %.1f sec", basisGap, speedSeconds)
+	if speedSeconds > 1 {
+		log.Printf("Splash time: %.2f min", speedSeconds/60)
 	} else {
-		log.Printf("Splash time: %.2f sec", timeAlert.Sub(referenceTime).Seconds())
+		log.Printf("Splash time: %.2f sec", speedSeconds)
 	}
 	log.Printf("------------------------------------------")
 
 	TockenState.Mu.Lock()
-	defer TockenState.Mu.Unlock()
 
 	if state.SplashTrigger {
 		if direction == "UP" && nextLevel > state.LastTriggeredLevel {
-			err := database.UpdateSplashLevel(state.SplashRecordID, int(nextLevel*100), ticker.LastPrice, ticker.FairPrice, ticker.Volume24)
+			err := database.UpdateSplashLevel(state.SplashRecordID, int(nextLevel*100), ticker.LastPrice, ticker.FairPrice, ticker.Volume24, probability)
 			if err != nil {
 				log.Printf("Error updating splash record in database: %v", err)
 				return
@@ -215,9 +225,10 @@ func SplashHandle(ticker models.SplashData, nextLevel float64, lastPriceChangeRe
 			state.LastTriggeredLevel = nextLevel
 			TockenState.TickerStates[ticker.Symbol] = state
 			log.Printf("%s UP PROGRESSION: Level %.0f%% | LAST PRICE: %.6f | FAIR PRICE %.6f | Volume: %d", ticker.Symbol, nextLevel*100, ticker.LastPrice, ticker.FairPrice, ticker.Volume24)
+			log.Printf("Win probability: %.0f%% | Wins: %d | Total: %d", probability, wins, total)
 			return
 		} else if direction == "DOWN" && nextLevel > state.LastTriggeredLevel {
-			err := database.UpdateSplashLevel(state.SplashRecordID, int(nextLevel*100), ticker.LastPrice, ticker.FairPrice, ticker.Volume24)
+			err := database.UpdateSplashLevel(state.SplashRecordID, int(nextLevel*100), ticker.LastPrice, ticker.FairPrice, ticker.Volume24, probability)
 			if err != nil {
 				log.Printf("Error updating splash record in database: %v", err)
 				return
@@ -225,6 +236,7 @@ func SplashHandle(ticker models.SplashData, nextLevel float64, lastPriceChangeRe
 			state.LastTriggeredLevel = nextLevel
 			TockenState.TickerStates[ticker.Symbol] = state
 			log.Printf("%s DOWN PROGRESSION: Level %.0f%% | LAST PRICE: %.6f | FAIR PRICE %.6f | Volume: %d", ticker.Symbol, nextLevel*100, ticker.LastPrice, ticker.FairPrice, ticker.Volume24)
+			log.Printf("Win probability: %.0f%% | Wins: %d | Total: %d", probability, wins, total)
 			return
 		}
 		return
@@ -237,18 +249,23 @@ func SplashHandle(ticker models.SplashData, nextLevel float64, lastPriceChangeRe
 		RefFairPrice:     previousPrices.FairPrice,
 		TriggerLastPrice: ticker.LastPrice,
 		TriggerFairPrice: ticker.FairPrice,
-		TriggerTime:      timeAlert,
+		TriggerTime:      now,
 		Volume24h:        ticker.Volume24,
+		LongProbability:  probability,
 	}
 
-	recordID, err := database.SaveSplashRecord(record)
+	recordID, err := database.SaveSplashRecord(record, basisGap, speedSeconds)
 	if err != nil {
-		log.Printf("Error saving splash record to database: %v", err)
+		log.Printf("[%s] DB SAVE ERROR: %v", ticker.Symbol, err)
+		state.LastTriggeredLevel = nextLevel
+		state.SplashTrigger = true
+		TockenState.TickerStates[ticker.Symbol] = state
 		return
 	}
+	state.SplashRecordID = recordID
 	state.LastTriggeredLevel = nextLevel
 	state.SplashTrigger = true
-	state.TriggerTime = timeAlert
+	state.TriggerTime = now
 	state.SplashDirection = direction
 	state.SplashRecordID = recordID
 

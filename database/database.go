@@ -28,20 +28,21 @@ func InitDatabase(dataSourceName string) error {
 	createTablePSQL := `
 	create table if not exists splash_records(
 		id serial primary key,
-		symbol varchar(30) not null,
-		direction varchar(4) not null,
-		trigger_level smallint not null,
-		ref_last_price real not null,
-		ref_fair_price real not null,
-		trigger_last_price float8 not null,
-		trigger_fair_price float8 not null,
-		trigger_time timestamp with time zone not null,
-		volume_24h int not null,
-		returned boolean default false,
-		return_time float8 default 0,
-		max_deviation float8 default 0,
-		long_probability float8 default 0,
-		short_probability float8 default 0
+        symbol varchar(30) not null,
+        direction varchar(10) not null,
+        trigger_level smallint not null,
+        trigger_time timestamp with time zone not null,
+        ref_last_price float8 not null,
+        ref_fair_price float8 not null,
+        trigger_last_price float8 not null,
+        trigger_fair_price float8 not null,
+        basis_gap float8 default 0.0,
+        trigger_speed_sec float8,
+        volume_24h bigint not null,
+        returned boolean default false,
+        return_time float8 default 0,
+        max_deviation float8 default 0,
+        prob_win float8 default 0
 	);`
 
 	_, err = DB.Exec(createTablePSQL)
@@ -67,28 +68,53 @@ func InitDatabase(dataSourceName string) error {
 	return nil
 }
 
-func SaveSplashRecord(r models.SplashRecord) (int64, error) {
+func GetContextStats(direction string, level int, volume int64, basisGap float64) (total int, wins int, err error) {
+	volMin, volMax := int64(float64(volume)*0.5), int64(float64(volume)*2)
+
+	gapMin, gapMax := basisGap-0.5, basisGap+0.5
+
+	queryPSQL := `
+	select 
+		count(*) as total,
+		coalesce(sum(case when returned = true then 1 else 0 end), 0) as wins
+	from splash_records
+	where direction = $1
+		and trigger_level = $2
+		and volume_24h between $3 and $4
+		and basis_gap between $5 and $6
+		and (returned = true or trigger_time < now() - interval '1 hour');`
+
+	err = DB.QueryRow(queryPSQL, direction, level, volMin, volMax, gapMin, gapMax).Scan(&total, &wins)
+	if err != nil {
+		return 0, 0, fmt.Errorf("failed to select query context stats: %w", err)
+	}
+	return total, wins, nil
+}
+
+func SaveSplashRecord(r models.SplashRecord, basisGap float64, speedSeconds float64) (int64, error) {
 	insertPSQL := `
 	insert into splash_records(
-		symbol, direction,
-		trigger_level, ref_last_price, ref_fair_price,
-		trigger_last_price, trigger_fair_price,
-		trigger_time, volume_24h,
-		returned, return_time, max_deviation,
-		long_probability, short_probability
-	) values (
-	 $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
-	) RETURNING id;`
+		symbol, direction, trigger_level, trigger_time, 
+        ref_last_price, ref_fair_price,
+        trigger_last_price, trigger_fair_price, 
+        basis_gap, trigger_speed_sec, volume_24h, prob_win
+	) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) returning id;`
 
 	var id int64
 	err := DB.QueryRow(
 		insertPSQL,
-		r.Symbol, r.Direction,
-		r.TriggerLevel, r.RefLastPrice, r.RefFairPrice,
-		r.TriggerLastPrice, r.TriggerFairPrice,
-		r.TriggerTime, r.Volume24h,
-		r.Returned, r.ReturnTime, r.MaxDeviation,
-		r.LongProbability, r.ShortProbability,
+		r.Symbol,
+		r.Direction,
+		r.TriggerLevel,
+		r.TriggerTime,
+		r.RefLastPrice,
+		r.RefFairPrice,
+		r.TriggerLastPrice,
+		r.TriggerFairPrice,
+		basisGap,
+		speedSeconds,
+		r.Volume24h,
+		r.LongProbability,
 	).Scan(&id)
 	if err != nil {
 		return 0, fmt.Errorf("failed to insert splash record: %w", err)
@@ -108,18 +134,14 @@ func UpdateSplashRecord(r models.SplashRecord) error {
 	update splash_records
 	set returned = $1,
 		return_time = $2,
-		max_deviation = $3,
-		long_probability = $4,
-		short_probability = $5
-	where id = $6;`
+		max_deviation = $3
+	where id = $4;`
 
 	_, err := DB.Exec(
 		updatePSQL,
 		r.Returned,
 		returnTimeMs,
 		r.MaxDeviation,
-		r.LongProbability,
-		r.ShortProbability,
 		r.ID,
 	)
 
@@ -131,14 +153,15 @@ func UpdateSplashRecord(r models.SplashRecord) error {
 	return nil
 }
 
-func UpdateSplashLevel(id int64, level int, lastPrice float64, fairPrice float64, volume24 int64) error {
+func UpdateSplashLevel(id int64, level int, lastPrice float64, fairPrice float64, volume24 int64, prob_win float64) error {
 	updatePSQL := `
 	update splash_records
 	set trigger_level = $1,
 		trigger_last_price = $2,
 		trigger_fair_price = $3,
-		volume_24h = $4
-	where id = $5;`
+		volume_24h = $4,
+		prob_win = $5
+	where id = $6;`
 
 	_, err := DB.Exec(
 		updatePSQL,
@@ -146,6 +169,7 @@ func UpdateSplashLevel(id int64, level int, lastPrice float64, fairPrice float64
 		lastPrice,
 		fairPrice,
 		volume24,
+		prob_win,
 		id,
 	)
 	return err
@@ -155,11 +179,11 @@ func GetSplashRecordByID(id int64) (models.SplashRecord, error) {
 	queryPSQL := `
 	select 
 		id, symbol, direction,
-		trigger_level, ref_last_price, ref_fair_price,
-		trigger_last_price, trigger_fair_price,
-		trigger_time, volume_24h,
-		returned, return_time, max_deviation,
-		long_probability, short_probability
+        trigger_level, ref_last_price, ref_fair_price,
+        trigger_last_price, trigger_fair_price,
+        trigger_time, volume_24h,
+        returned, return_time, max_deviation,
+        prob_win
 	from splash_records where id = $1;`
 
 	r := models.SplashRecord{}
@@ -171,7 +195,7 @@ func GetSplashRecordByID(id int64) (models.SplashRecord, error) {
 		&r.TriggerLastPrice, &r.TriggerFairPrice,
 		&r.TriggerTime, &r.Volume24h,
 		&r.Returned, &r.ReturnTime, &r.MaxDeviation,
-		&r.LongProbability, &r.ShortProbability,
+		&r.LongProbability,
 	)
 
 	if err != nil {
@@ -184,48 +208,4 @@ func GetSplashRecordByID(id int64) (models.SplashRecord, error) {
 	r.ReturnTime = time.Duration(returnTime) * time.Second
 
 	return r, nil
-}
-
-func GetHistoricalSplashRecords(symbol string, level float64) ([]models.SplashRecord, error) {
-
-	queryPSQL := `
-	select 
-		id, symbol, direction,
-		trigger_level, ref_last_price, ref_fair_price,
-		trigger_last_price, trigger_fair_price,
-		trigger_time, volume_24h,
-		returned, return_time, max_deviation,
-		long_probability, short_probability
-	from splash_records where symbol = $1 and trigger_level = $2 and return_time > 0
-	order by trigger_time desc
-	limit 100`
-
-	rows, err := DB.Query(queryPSQL, symbol, level)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query splash records: %w", err)
-	}
-	defer rows.Close()
-
-	var records []models.SplashRecord
-	for rows.Next() {
-		var r models.SplashRecord
-		var returnTime int64
-
-		err := rows.Scan(
-			&r.ID, &r.Symbol, &r.Direction,
-			&r.TriggerLevel, &r.RefLastPrice, &r.RefFairPrice,
-			&r.TriggerLastPrice, &r.TriggerFairPrice,
-			&r.TriggerTime, &r.Volume24h,
-			&r.Returned, &returnTime, &r.MaxDeviation,
-			&r.LongProbability, &r.ShortProbability,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("failed to scan splash record: %w", err)
-		}
-
-		r.ReturnTime = time.Duration(returnTime) * time.Second
-		records = append(records, r)
-	}
-
-	return records, nil
 }
