@@ -29,15 +29,21 @@ func TrackReturnBack(
 		if !ok || !state.SplashTrigger || state.SplashRecordID != recordID {
 			return
 		}
+		currentLevel := state.LastTriggeredLevel
+		dynamicTimeoutWindow := 2 + (currentLevel * 100 * 2)
+		maxReturnWindow := time.Duration(dynamicTimeoutWindow) * time.Minute
+
+		tolerance := dynamicTolerance(currentLevel)
 
 		timeSinceTrigger := time.Since(triggerTime)
-		if timeSinceTrigger > models.MaxReturnWindow {
+		if timeSinceTrigger > maxReturnWindow {
 			log.Printf("---------------------------------------------------------------")
 			log.Printf("MAX RETURN WINDOW EXCEEDED: %s | LEVEL: %.0f%% | TIME SINCE TRIGGER: %.2f min",
 				symbol, state.LastTriggeredLevel*100, timeSinceTrigger.Minutes())
 			log.Printf("NOW LAST PRICE:  %.6f | NOW FAIR PRICE:  %.6f | REFERENCE PRICES: FAIR:  %.6f | LAST:  %.6f",
 				state.LatestTickerData.LastPrice, state.LatestTickerData.FairPrice, refFairPrice, refLastPrice)
 			log.Printf("---------------------------------------------------------------")
+			SaveReturnBackRecord(recordID, false, timeSinceTrigger, maxDeviation)
 			resetTickerState(symbol)
 			return
 		}
@@ -54,17 +60,8 @@ func TrackReturnBack(
 			maxDeviation = currentDeviation
 		}
 
-		if currentDeviation <= models.ReturnTolerance {
+		if currentDeviation <= tolerance {
 			timeToReturn := time.Since(triggerTime)
-
-			TockenState.Mu.Lock()
-
-			state.SplashTrigger = false
-			state.TriggerTime = time.Time{}
-			state.SplashDirection = ""
-
-			TockenState.TickerStates[symbol] = state
-			TockenState.Mu.Unlock()
 			if timeToReturn.Minutes() >= 1 {
 				log.Printf("---------------------------------------------------------------")
 				log.Printf("PRICE RETURNED: %s | LEVEL: %.0f%% | RETURN BACK TIME: %.2f min |",
@@ -72,7 +69,7 @@ func TrackReturnBack(
 				log.Printf("NOW LAST PRICE:  %.6f | NOW FAIR PRICE:  %.6f | REFERENCE PRICES: FAIR:  %.6f | LAST:  %.6f",
 					currentData.LastPrice, currentData.FairPrice, refFairPrice, refLastPrice)
 				log.Printf("---------------------------------------------------------------")
-				SaveReturnBackRecord(recordID, timeToReturn, maxDeviation, lastPriceChangeToRef, fairPriceChangeToRef)
+				SaveReturnBackRecord(recordID, true, timeToReturn, maxDeviation)
 				resetTickerState(symbol)
 				return
 			} else {
@@ -82,11 +79,10 @@ func TrackReturnBack(
 				log.Printf("NOW LAST PRICE:  %.6f | NOW FAIR PRICE:  %.6f | REFERENCE PRICES: FAIR:  %.6f | LAST:  %.6f",
 					currentData.LastPrice, currentData.FairPrice, refFairPrice, refLastPrice)
 				log.Printf("---------------------------------------------------------------")
-				SaveReturnBackRecord(recordID, timeToReturn, maxDeviation, lastPriceChangeToRef, fairPriceChangeToRef)
+				SaveReturnBackRecord(recordID, true, timeToReturn, maxDeviation)
 				resetTickerState(symbol)
 				return
 			}
-
 		}
 
 	}
@@ -108,7 +104,7 @@ func resetTickerState(symbol string) {
 	}
 }
 
-func SaveReturnBackRecord(recordID int64, returnTime time.Duration, maxDeviation float64, longProb float64, shortProb float64) {
+func SaveReturnBackRecord(recordID int64, returned bool, returnTime time.Duration, maxDeviation float64) {
 	record, err := database.GetSplashRecordByID(recordID)
 	if err != nil {
 		log.Printf("Error saving return back info for record ID %d: %v", recordID, err)
@@ -123,4 +119,8 @@ func SaveReturnBackRecord(recordID int64, returnTime time.Duration, maxDeviation
 		log.Printf("Error updating splash record ID %d: %v", recordID, err)
 		return
 	}
+}
+
+func dynamicTolerance(level float64) float64 {
+	return models.ReturnTolerance + (level * 0.1)
 }

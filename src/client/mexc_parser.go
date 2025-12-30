@@ -204,7 +204,7 @@ func SplashHandle(ticker models.SplashData, nextLevel float64, lastPriceChangeRe
 	log.Printf("Total in 3m:")
 	log.Printf("Last Price Change:%.2f%% | Reference Last Price: %.6f | Now last price: %.6f", lastPriceChangeRef*100, previousPrices.LastPrice, ticker.LastPrice)
 	log.Printf("Fair Price Change:%.2f%% | Reference Fair Price: %.6f | Now fair price: %.6f", fairPriceChangeRef*100, previousPrices.FairPrice, ticker.FairPrice)
-	log.Printf("Volume24h: %v", ticker.Volume24)
+	log.Printf("Volume24h: %v | Win probability: %.2f", ticker.Volume24, probability)
 	log.Printf("Gap: %.2f%% | Speed: %.1f sec", basisGap, speedSeconds)
 	if speedSeconds > 1 {
 		log.Printf("Splash time: %.2f min", speedSeconds/60)

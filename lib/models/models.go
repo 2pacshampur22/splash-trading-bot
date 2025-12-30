@@ -9,7 +9,6 @@ const (
 	FuturesRestAPI  = "https://contract.mexc.com/api/v1/contract/ticker"
 	Window          = 5 * time.Minute
 	ReturnTolerance = 0.005
-	MaxReturnWindow = 1 * time.Minute
 )
 
 var SplashLevels = []float64{

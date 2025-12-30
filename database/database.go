@@ -82,7 +82,7 @@ func GetContextStats(direction string, level int, volume int64, basisGap float64
 		and trigger_level = $2
 		and volume_24h between $3 and $4
 		and basis_gap between $5 and $6
-		and (returned = true or trigger_time < now() - interval '1 hour');`
+		and (returned = true or trigger_time < (now() - (interval '5 minutes' + (trigger_level * interval '2 minutes'))));`
 
 	err = DB.QueryRow(queryPSQL, direction, level, volMin, volMax, gapMin, gapMax).Scan(&total, &wins)
 	if err != nil {
