@@ -13,17 +13,32 @@ import (
 var DB *sql.DB
 
 func InitDatabase(dataSourceName string) error {
+	const (
+		host     = ""
+		port     = 0
+		user     = ""
+		password = ""
+		dbname   = ""
+	)
+
+	connStr := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=disable",
+		host, port, user, password, dbname)
+
 	var err error
-	DB, err = sql.Open("postgres", dataSourceName)
+	DB, err = sql.Open("postgres", connStr)
 	if err != nil {
-		return fmt.Errorf("failed to open database connection: %w", err)
+		return fmt.Errorf("ошибка открытия базы данных: %w", err)
 	}
+
+	DB.SetMaxOpenConns(25)
+	DB.SetMaxIdleConns(10)
+	DB.SetConnMaxLifetime(time.Minute * 5)
 
 	if err = DB.Ping(); err != nil {
-		return fmt.Errorf("failed to ping database: %w", err)
+		return fmt.Errorf("не удалось подключиться к VPS (Ping): %w", err)
 	}
 
-	log.Println("Database connection established")
+	log.Println("Успешное подключение к удаленной базе данных на VPS")
 
 	createTablePSQL := `
 	create table if not exists splash_records(
