@@ -15,7 +15,7 @@ var DB *sql.DB
 func InitDatabase(dataSourceName string) error {
 	const (
 		host     = ""
-		port     = 0
+		port     = ""
 		user     = ""
 		password = ""
 		dbname   = ""
