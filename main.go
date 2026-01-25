@@ -25,8 +25,8 @@ func main() {
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},
-		BackgroundColour: &options.RGBA{R: 10, G: 10, B: 15, A: 255}, // Темный фон
-		OnStartup:        app.Startup,                                // Здесь запустится твой client.StartPolling
+		BackgroundColour: &options.RGBA{R: 10, G: 10, B: 15, A: 255},
+		OnStartup:        app.Startup,
 		Bind: []interface{}{
 			app,
 		},

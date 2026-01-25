@@ -1,6 +1,7 @@
 package models
 
 import (
+	"context"
 	"sync"
 	"time"
 )
@@ -11,14 +12,16 @@ const (
 	ReturnTolerance = 0.005
 )
 
-var SplashLevels = []float64{
-	0.01,
-	0.03,
-	0.05,
-	0.12,
-	0.24,
-	0.48,
-	0.96,
+var AppCtx context.Context
+
+type SplashTier struct {
+	Level       float64 `json:"level"`
+	Window      int     `json:"window"`
+	IsForcedPin bool    `json:"isForcedPin"`
+}
+
+type EngineConfig struct {
+	Tiers []SplashTier `json:"tiers"`
 }
 
 type Responce struct {
@@ -36,7 +39,7 @@ type SplashData struct {
 	Symbol    string  `json:"symbol"`
 	LastPrice float64 `json:"lastPrice"`
 	FairPrice float64 `json:"fairPrice"`
-	Volume24  int64   `json:"volume24"`
+	Volume24  int64   `json:"volume24"` //TODO: Заменить на amount24 - usdt volume
 }
 
 type SplashRecord struct {
@@ -72,4 +75,11 @@ type TickerState struct {
 type SharedState struct {
 	TickerStates map[string]TickerState
 	Mu           sync.Mutex
+}
+
+var CurrentConfig = EngineConfig{
+	Tiers: []SplashTier{
+		{Level: 3, Window: 10, IsForcedPin: false},
+		{Level: 5, Window: 15, IsForcedPin: false},
+	},
 }

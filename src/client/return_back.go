@@ -1,11 +1,14 @@
 package client
 
 import (
+	"fmt"
 	"log"
 	"math"
 	"splash-trading-bot/database"
 	"splash-trading-bot/lib/models"
 	"time"
+
+	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 func TrackReturnBack(
@@ -15,13 +18,18 @@ func TrackReturnBack(
 	refFairPrice float64,
 	triggerTime time.Time,
 	direction string,
+	userWindowMin int,
 ) {
 	ticker := time.NewTicker(50 * time.Millisecond)
 	defer ticker.Stop()
+	warmup := 0
 	maxDeviation := 0.0
 
 	for range ticker.C {
-
+		if warmup < 2 {
+			warmup++
+			continue
+		}
 		TockenState.Mu.Lock()
 		state, ok := TockenState.TickerStates[symbol]
 		TockenState.Mu.Unlock()
@@ -30,19 +38,20 @@ func TrackReturnBack(
 			return
 		}
 		currentLevel := state.LastTriggeredLevel
-		dynamicTimeoutWindow := 2 + (currentLevel * 100 * 2)
-		maxReturnWindow := time.Duration(dynamicTimeoutWindow) * time.Minute
+
+		maxReturnWindow := time.Duration(userWindowMin) * time.Minute
 
 		tolerance := dynamicTolerance(currentLevel)
 
 		timeSinceTrigger := time.Since(triggerTime)
 		if timeSinceTrigger > maxReturnWindow {
-			log.Printf("---------------------------------------------------------------")
-			log.Printf("MAX RETURN WINDOW EXCEEDED: %s | LEVEL: %.0f%% | TIME SINCE TRIGGER: %.2f min",
-				symbol, state.LastTriggeredLevel*100, timeSinceTrigger.Minutes())
-			log.Printf("NOW LAST PRICE:  %.6f | NOW FAIR PRICE:  %.6f | REFERENCE PRICES: FAIR:  %.6f | LAST:  %.6f",
-				state.LatestTickerData.LastPrice, state.LatestTickerData.FairPrice, refFairPrice, refLastPrice)
-			log.Printf("---------------------------------------------------------------")
+			log.Printf("TIMEOUT: %s exceeded user window of %d min", symbol, userWindowMin)
+			if models.AppCtx != nil {
+				runtime.EventsEmit(models.AppCtx, "splash:new", map[string]interface{}{
+					"symbol": symbol,
+					"status": "TIMEOUT",
+				})
+			}
 			SaveReturnBackRecord(recordID, false, timeSinceTrigger, maxDeviation)
 			resetTickerState(symbol)
 			return
@@ -62,27 +71,20 @@ func TrackReturnBack(
 
 		if currentDeviation <= tolerance {
 			timeToReturn := time.Since(triggerTime)
-			if timeToReturn.Minutes() >= 1 {
-				log.Printf("---------------------------------------------------------------")
-				log.Printf("PRICE RETURNED: %s | LEVEL: %.0f%% | RETURN BACK TIME: %.2f min |",
-					symbol, state.LastTriggeredLevel*100, timeToReturn.Minutes())
-				log.Printf("NOW LAST PRICE:  %.6f | NOW FAIR PRICE:  %.6f | REFERENCE PRICES: FAIR:  %.6f | LAST:  %.6f",
-					currentData.LastPrice, currentData.FairPrice, refFairPrice, refLastPrice)
-				log.Printf("---------------------------------------------------------------")
-				SaveReturnBackRecord(recordID, true, timeToReturn, maxDeviation)
-				resetTickerState(symbol)
-				return
-			} else {
-				log.Printf("---------------------------------------------------------------")
-				log.Printf("PRICE RETURNED: %s | LEVEL: %.0f%% | RETURN BACK TIME: %.2f sec",
-					symbol, state.LastTriggeredLevel*100, timeToReturn.Seconds())
-				log.Printf("NOW LAST PRICE:  %.6f | NOW FAIR PRICE:  %.6f | REFERENCE PRICES: FAIR:  %.6f | LAST:  %.6f",
-					currentData.LastPrice, currentData.FairPrice, refFairPrice, refLastPrice)
-				log.Printf("---------------------------------------------------------------")
-				SaveReturnBackRecord(recordID, true, timeToReturn, maxDeviation)
-				resetTickerState(symbol)
-				return
+			log.Printf("PRICE RETURNED: %s | LEVEL: %.0f%%", symbol, currentLevel*100)
+
+			if models.AppCtx != nil {
+				runtime.EventsEmit(models.AppCtx, "splash:new", map[string]interface{}{
+					"symbol":     symbol,
+					"status":     "RETURNED",
+					"returnTime": fmt.Sprintf("%.2f", timeToReturn.Seconds()),
+					"lastPrice":  fmt.Sprintf("%.6f", currentData.LastPrice),
+					"fairPrice":  fmt.Sprintf("%.6f", currentData.FairPrice),
+				})
 			}
+			SaveReturnBackRecord(recordID, true, timeToReturn, maxDeviation)
+			resetTickerState(symbol)
+			return
 		}
 
 	}
@@ -122,5 +124,5 @@ func SaveReturnBackRecord(recordID int64, returned bool, returnTime time.Duratio
 }
 
 func dynamicTolerance(level float64) float64 {
-	return models.ReturnTolerance + (level * 0.1)
+	return models.ReturnTolerance + (level / 100 * 0.1)
 }

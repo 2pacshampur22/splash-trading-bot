@@ -2,7 +2,10 @@ package app
 
 import (
 	"context"
+	"splash-trading-bot/lib/models"
 	"splash-trading-bot/src/client"
+
+	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 type App struct {
@@ -16,5 +19,10 @@ func NewApp() *App {
 // startup вызывается при запуске приложения.
 func (a *App) Startup(ctx context.Context) {
 	a.ctx = ctx
-	go client.StartPolling()
+	go client.StartPolling(a.ctx)
+}
+
+func (a *App) UpdateConfig(config models.EngineConfig) {
+	models.CurrentConfig = config
+	runtime.LogInfof(a.ctx, "Config successfully updated, %v levels updated", len(config.Tiers))
 }

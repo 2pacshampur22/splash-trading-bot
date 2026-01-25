@@ -2,43 +2,20 @@
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  --bg-dark: #09090b; /* Matte Black/Grey */
-  --card-bg: #0b1221;     /* Темно-синий для карточек */
-  --accent-blue: #3b82f6; /* Яркий синий */
-  --accent-red: #ef4444;  /* Красный для шортов */
+/* Перенеси сюда всё из тега <style> своего App.jsx */
+.custom-scrollbar::-webkit-scrollbar { 
+    width: 3px; 
+}
+.custom-scrollbar::-webkit-scrollbar-thumb { 
+    background: #222; 
+    border-radius: 10px; 
 }
 
-body {
-  background-color: var(--bg-dark);
-  color: #e2e8f0;
-  font-family: 'Inter', system-ui, -apple-system, sans-serif;
-  overflow-x: hidden;
-  /* Фоновый градиент*/
-  background-image: radial-gradient(circle at 50% 0%, #172033 0%, #02040a 60%);
-  min-height: 100vh;
+@keyframes shrink-width { 
+    from { width: 100%; } 
+    to { width: 0%; } 
 }
 
-/* Скроллбар */
-::-webkit-scrollbar {
-  width: 8px;
-}
-::-webkit-scrollbar-track {
-  background: #02040a;
-}
-::-webkit-scrollbar-thumb {
-  background: #1e293b;
-  border-radius: 4px;
-}
-::-webkit-scrollbar-thumb:hover {
-  background: #334155;
-}
-
-/* Анимация появления */
-@keyframes fadeIn {
-  from { opacity: 0; transform: translateY(10px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-.animate-enter {
-  animation: fadeIn 0.3s ease-out forwards;
+.animate-shrink-width { 
+    animation: shrink-width 10s linear forwards; 
 }
