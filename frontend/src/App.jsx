@@ -22,7 +22,7 @@ const SignalCard = ({ signal }) => {
   const isTimeout = signal.status === 'TIMEOUT';
   const getWinRateColor = (prob) => {
   const val = parseFloat(prob);
-  if (val <= 0) return 'text-slate-700'; // Серый для NaN
+  if (val <= 0) return 'text-slate-700';
   if (val > 60) return 'text-green-500';
   if (val > 30) return 'text-yellow-500';
   return 'text-red-500';
@@ -56,17 +56,17 @@ const SignalCard = ({ signal }) => {
               {signal.direction} {signal.level}%
             </span>
             {signal.isProgression && !isReturned && !isTimeout && (
-               <span className="text-[8px] bg-blue-600 text-white px-1 rounded animate-pulse uppercase font-black tracking-tighter">Progression</span>
+               <span className="text-[10px] bg-blue-600 text-white px-1 rounded animate-pulse uppercase font-black tracking-tighter">Progression</span>
             )}
           </div>
-          <div className="text-[10px] text-slate-500 flex gap-3 font-bold uppercase font-mono italic opacity-60">
-             <span className="flex items-center gap-1"><Database size={10}/> VOL24: {signal.volume ? (signal.volume / 100000).toFixed(1) : "0"}M</span>
-             <span className="flex items-center gap-1 opacity-40"><Clock size={10}/> {signal.timestamp}</span>
-             <span className="text-slate-600 border-l border-white/10 pl-2">Limit: {signal.activeWindow}m</span>
+          <div className="text-[12px] text-slate-400 flex gap-3 font-bold uppercase font-mono italic opacity-60">
+             <span className="flex items-center gap-1"><Database size={12}/> VOL24: {signal.volume ? (signal.volume / 1000000).toFixed(1) : "0"}M</span>
+             <span className="flex items-center gap-1 opacity-40"><Clock size={12}/> {signal.timestamp}</span>
+             <span className="text-slate-400 border-l border-white/10 pl-2">Time Window: {signal.activeWindow}m</span>
           </div>
         </div>
         <div className="text-right">
-          <div className="text-[8px] text-slate-400 font-black uppercase tracking-widest mb-1">Win Probability</div>
+          <div className="text-[10px] text-slate-400 font-black uppercase tracking-widest mb-1">Win Probability</div>
           <div className={`text-xl font-black leading-none ${signal.prob > 0 ? getWinRateColor(signal.prob) : 'text-slate-700'}`}>
             {signal.prob > 0 ? `${signal.prob}%` : 'NaN'}
           </div>
@@ -75,14 +75,14 @@ const SignalCard = ({ signal }) => {
 
       <div className="grid grid-cols-2 gap-2 bg-black/40 p-2.5 rounded border border-white/5 text-[10px] font-mono">
         <div className="space-y-1 border-r border-white/5 pr-2">
-          <div className="text-[8px] text-slate-600 uppercase font-black mb-1 opacity-50 tracking-tighter">Reference (3m)</div>
-          <div className="flex justify-between"><span>Last Price:</span> <span className="text-slate-300">{signal.refLast}</span></div>
-          <div className="flex justify-between"><span>Fair Price:</span> <span className="text-slate-300">{signal.refFair}</span></div>
+          <div className="text-[12px] text-slate-600 uppercase font-black mb-1 opacity-50 tracking-tighter">Reference Prices</div>
+          <div className="flex justify-between"><span className="text-[12px]">Last Price:</span> <span className="text-[12px] text-slate-300">{signal.refLast}</span></div>
+          <div className="flex justify-between"><span className="text-[12px]">Fair Price:</span> <span className="text-[12px] text-slate-300">{signal.refFair}</span></div>
         </div>
         <div className="space-y-1 pl-2">
-          <div className="text-[8px] text-slate-600 uppercase font-black mb-1 opacity-50 tracking-tighter">Actual / Trigger</div>
-          <div className="flex justify-between"><span>Last Price:</span> <span className="text-blue-400 font-bold">{signal.lastPrice}</span></div>
-          <div className="flex justify-between"><span>Fair Price:</span> <span className="text-blue-300">{signal.fairPrice}</span></div>
+          <div className="text-[12px] text-slate-600 uppercase font-black mb-1 opacity-50 tracking-tighter">Actual Prices</div>
+          <div className=" flex justify-between"><span className="text-[12px]">Last Price:</span> <span className="text-[12px] text-blue-400 font-bold">{signal.lastPrice}</span></div>
+          <div className="flex justify-between"><span className="text-[12px]">Fair Price:</span> <span className="text-[12px] text-blue-300">{signal.fairPrice}</span></div>
         </div>
       </div>
 
@@ -183,15 +183,19 @@ const App = () => {
         if (existing.status !== 'ACTIVE' || data.direction !== existing.direction) return prev;
 
         const existingTier = getApplicableTier(existing.level);
-        const updated = {
-          ...existing, ...data,
-          isProgression: existingTier ? currentTier.level > existingTier.level : false,
-          isPinned: (data.prob > 60 || currentTier.isForcedPin), 
-          unpinAt: (data.prob > 60 || currentTier.isForcedPin) ? now + 10000 : null,
-          createdAt: (existingTier && currentTier.level > existingTier.level) ? now : existing.createdAt, 
-          activeWindow: currentTier.window
-        };
-        return [updated, ...prev.filter((_, i) => i !== existingIdx)];
+       if (currentTier && existingTier && currentTier.level > existingTier.level) {
+          const updated = {
+            ...existing,
+            ...data,
+            isProgression: true,
+            activeWindow: currentTier.window, 
+            createdAt: Date.now(),          
+            isPinned: (data.prob > 60 || currentTier.isForcedPin),
+            unpinAt: (data.prob > 60 || currentTier.isForcedPin) ? now + 10000 : null,
+          };
+          const filtered = prev.filter((_, i) => i !== existingIdx);
+          return [updated, ...filtered];
+        }
       }
 
       const newSig = { ...data, id: `sig-${data.symbol}-${now}`, isPinned: (data.prob > 60 || currentTier.isForcedPin), unpinAt: (data.prob > 60 || currentTier.isForcedPin) ? now + 10000 : null, createdAt: now, activeWindow: currentTier.window, status: 'ACTIVE' };
@@ -243,9 +247,9 @@ const App = () => {
                 {splashConfigs.map((cfg, idx) => (
                   <div key={idx} className="bg-white/5 p-3 border border-white/5 rounded-sm relative group">
                     <div className="grid grid-cols-[1fr_1fr_40px] gap-4 items-end">
-                        <div><label className="text-[8px] text-slate-500 uppercase font-black">Level (%)</label>
+                        <div><label className="text-[10px] text-slate-500 uppercase font-black">Level (%)</label>
                              <TierInput value={cfg.level} onChange={(v) => { const n = [...splashConfigs]; n[idx].level = v; setSplashConfigs(n); }} /></div>
-                        <div><label className="text-[8px] text-slate-500 uppercase font-black">Window (m)</label>
+                        <div><label className="text-[10px] text-slate-500 uppercase font-black">Window (m)</label>
                              <TierInput value={cfg.window} onChange={(v) => { const n = [...splashConfigs]; n[idx].window = v; setSplashConfigs(n); }} /></div>
                         <button onClick={() => { const n = [...splashConfigs]; n[idx].isForcedPin = !n[idx].isForcedPin; setSplashConfigs(n); }}
                           className={`h-7 w-full flex items-center justify-center rounded border transition-all ${cfg.isForcedPin ? 'bg-blue-600/20 border-blue-500 text-blue-400 shadow-md' : 'bg-black/40 border-white/10 text-slate-600'}`}>{cfg.isForcedPin ? <Pin size={14} /> : <PinOff size={14} />}</button>
@@ -262,7 +266,7 @@ const App = () => {
       </main>
 
       <footer className="h-6 border-t border-white/5 bg-[#050505] flex items-center px-6 justify-between text-[8px] font-bold text-slate-600 uppercase tracking-widest shrink-0">
-        <span>Basis Gap Alpha-Filter</span>
+        <span>Terminus Alpha v0.1</span>
         <span className="text-green-500 flex items-center gap-1"><Zap size={8}/> Parser Active</span>
       </footer>
     </div>

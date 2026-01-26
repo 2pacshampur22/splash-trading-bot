@@ -20,12 +20,14 @@ var TockenState = &models.SharedState{
 	Mu:           sync.Mutex{},
 	TickerStates: make(map[string]models.TickerState),
 }
+var httpClient = &http.Client{
+	Timeout: 3 * time.Second,
+}
 
 func GetNextSplash(currentChange float64, lastTriggeredLevel float64) (models.SplashTier, bool) {
 	var triggeredLevel models.SplashTier
 	found := false
 
-	// Если уровни не настроены - выходим
 	if len(models.CurrentConfig.Tiers) == 0 {
 		return triggeredLevel, false
 	}
@@ -33,10 +35,9 @@ func GetNextSplash(currentChange float64, lastTriggeredLevel float64) (models.Sp
 	for _, tier := range models.CurrentConfig.Tiers {
 		if tier.Level <= 0 {
 			continue
-		} // Защита от кривых настроек
+		}
 
 		targetRate := tier.Level / 100.0
-		// Срабатывает только если текущее изменение пробило уровень И этот уровень выше последнего зафиксированного
 		if targetRate > lastTriggeredLevel && currentChange >= targetRate {
 			if !found || tier.Level > triggeredLevel.Level {
 				triggeredLevel = tier
@@ -48,11 +49,15 @@ func GetNextSplash(currentChange float64, lastTriggeredLevel float64) (models.Sp
 }
 
 func FetchAllFuturesTickers() ([]models.SplashData, error) {
-	resp, err := http.Get(models.FuturesRestAPI)
+	resp, err := httpClient.Get(models.FuturesRestAPI)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("network error: %w", err)
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("API error: status %d", resp.StatusCode)
+	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -61,6 +66,7 @@ func FetchAllFuturesTickers() ([]models.SplashData, error) {
 
 	var apiResponce models.Responce
 	if err := json.Unmarshal(body, &apiResponce); err != nil {
+		log.Printf("JSON Decode Error: %v", err)
 		return nil, err
 	}
 	return apiResponce.Data, nil
@@ -71,34 +77,47 @@ func StartPolling(ctx context.Context) {
 	const postgresConnString = "host=localhost port=5432 user=postgres password=10072005Egor dbname=splashtradingbot sslmode=disable"
 	database.InitDatabase(postgresConnString)
 
-	ticker := time.NewTicker(50 * time.Millisecond)
-	var referenceTime time.Time
+	log.Println("Terminus Engine: Online")
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
 
 	for range ticker.C {
+		now := time.Now()
+
 		newTickers, err := FetchAllFuturesTickers()
 		if err != nil {
 			continue
 		}
 
 		TockenState.Mu.Lock()
-		if time.Since(referenceTime) >= models.Window {
-			for _, t := range newTickers {
-				if t.LastPrice <= 0 {
-					continue
-				}
+		for _, t := range newTickers {
+			state, exists := TockenState.TickerStates[t.Symbol]
+
+			if !exists {
 				TockenState.TickerStates[t.Symbol] = models.TickerState{
-					WindowStartRef: t, LatestTickerData: t, LastTriggeredLevel: 0,
+					WindowStartRef:   t,
+					LatestTickerData: t,
+					LastRefUpdate:    now,
 				}
+				continue
 			}
-			referenceTime = time.Now()
-			log.Println("Reference prices updated")
+
+			if !state.SplashTrigger && now.Sub(state.LastRefUpdate) >= models.Window {
+				state.WindowStartRef = t
+				state.LastRefUpdate = now
+				state.LastTriggeredLevel = 0
+			}
+
+			state.LatestTickerData = t
+			TockenState.TickerStates[t.Symbol] = state
 		}
 		TockenState.Mu.Unlock()
-		CheckPrices(newTickers, referenceTime)
+
+		CheckPrices(newTickers, now)
 	}
 }
 
-func CheckPrices(newTickers []models.SplashData, referenceTime time.Time) {
+func CheckPrices(newTickers []models.SplashData, now time.Time) {
 	for _, ticker := range newTickers {
 		TockenState.Mu.Lock()
 		state, ok := TockenState.TickerStates[ticker.Symbol]
@@ -122,11 +141,9 @@ func CheckPrices(newTickers []models.SplashData, referenceTime time.Time) {
 		tier, isTriggered := GetNextSplash(maxChange, state.LastTriggeredLevel)
 
 		if isTriggered {
-			// !!! КЛЮЧЕВОЙ ФИКС: Вызываем обработчик ТОЛЬКО если это новый сплеш
-			// или если уровень из настроек стал выше текущего
 			if !state.SplashTrigger || tier.Level > (state.LastTriggeredLevel*100) {
 				TockenState.Mu.Unlock()
-				SplashHandle(ticker, tier, lastChange, fairChange, ref, referenceTime, state)
+				SplashHandle(ticker, tier, lastChange, fairChange, ref, now, state)
 				continue
 			}
 		}
@@ -153,21 +170,19 @@ func SplashHandle(ticker models.SplashData, tier models.SplashTier, lpCh, fpCh f
 
 	targetLevelInt := int(math.Round(tier.Level))
 
-	// Логика ПРОГРЕССИИ
 	if state.SplashTrigger {
 		lastLevelInt := int(math.Round(state.LastTriggeredLevel * 100))
 		if direction == state.SplashDirection && targetLevelInt > lastLevelInt {
-
-			// ЗАПРОС К БД ТОЛЬКО ТУТ
-			total, wins, _ := database.GetContextStats(direction, targetLevelInt, ticker.Volume24, basisGap)
+			total, wins, _ := database.GetContextStats(direction, targetLevelInt, ticker.Volume24, basisGap, tier.Window)
 			prob := -1.0
 			if total >= 3 {
 				prob = math.Round((float64(wins) / float64(total)) * 100)
 			}
 
-			database.UpdateSplashLevel(state.SplashRecordID, targetLevelInt, ticker.LastPrice, ticker.FairPrice, ticker.Volume24, prob)
+			database.UpdateSplashLevel(state.SplashRecordID, targetLevelInt, ticker.LastPrice, ticker.FairPrice, ticker.Volume24, prob, tier.Window)
 
 			state.LastTriggeredLevel = float64(targetLevelInt) / 100.0
+			state.CurrentTimeWindow = tier.Window
 			TockenState.Mu.Lock()
 			TockenState.TickerStates[ticker.Symbol] = state
 			TockenState.Mu.Unlock()
@@ -177,19 +192,24 @@ func SplashHandle(ticker models.SplashData, tier models.SplashTier, lpCh, fpCh f
 		return
 	}
 
-	// Логика НОВОГО сплеша
-	// ЗАПРОС К БД ТОЛЬКО ТУТ
-	total, wins, _ := database.GetContextStats(direction, targetLevelInt, ticker.Volume24, basisGap)
+	total, wins, _ := database.GetContextStats(direction, targetLevelInt, ticker.Volume24, basisGap, tier.Window)
 	prob := -1.0
 	if total >= 3 {
 		prob = math.Round((float64(wins) / float64(total)) * 100)
 	}
 
 	record := models.SplashRecord{
-		Symbol: ticker.Symbol, Direction: direction, TriggerLevel: targetLevelInt,
-		RefLastPrice: ref.LastPrice, RefFairPrice: ref.FairPrice,
-		TriggerLastPrice: ticker.LastPrice, TriggerFairPrice: ticker.FairPrice,
-		TriggerTime: now, Volume24h: ticker.Volume24, LongProbability: prob,
+		Symbol:           ticker.Symbol,
+		Direction:        direction,
+		TriggerLevel:     targetLevelInt,
+		RefLastPrice:     ref.LastPrice,
+		RefFairPrice:     ref.FairPrice,
+		TriggerLastPrice: ticker.LastPrice,
+		TriggerFairPrice: ticker.FairPrice,
+		TriggerTime:      now,
+		Volume24h:        ticker.Volume24,
+		LongProbability:  prob,
+		TimeWindow:       tier.Window,
 	}
 
 	recordID, err := database.SaveSplashRecord(record, basisGap, speed)

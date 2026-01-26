@@ -37,10 +37,14 @@ func TrackReturnBack(
 		if !ok || !state.SplashTrigger || state.SplashRecordID != recordID {
 			return
 		}
+
+		currentTimeWindow := state.CurrentTimeWindow
+		if currentTimeWindow == 0 {
+			currentTimeWindow = userWindowMin
+		}
+
 		currentLevel := state.LastTriggeredLevel
-
-		maxReturnWindow := time.Duration(userWindowMin) * time.Minute
-
+		maxReturnWindow := time.Duration(currentTimeWindow) * time.Minute
 		tolerance := dynamicTolerance(currentLevel)
 
 		timeSinceTrigger := time.Since(triggerTime)

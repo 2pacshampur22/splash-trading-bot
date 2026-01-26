@@ -39,7 +39,7 @@ type SplashData struct {
 	Symbol    string  `json:"symbol"`
 	LastPrice float64 `json:"lastPrice"`
 	FairPrice float64 `json:"fairPrice"`
-	Volume24  int64   `json:"volume24"` //TODO: Заменить на amount24 - usdt volume
+	Volume24  float64 `json:"amount24"` //TODO: Заменить на amount24 - usdt volume
 }
 
 type SplashRecord struct {
@@ -47,12 +47,13 @@ type SplashRecord struct {
 	Symbol           string
 	Direction        string
 	TriggerLevel     int
+	TimeWindow       int
 	RefLastPrice     float64
 	RefFairPrice     float64
 	TriggerLastPrice float64
 	TriggerFairPrice float64
 	TriggerTime      time.Time
-	Volume24h        int64
+	Volume24h        float64
 	Returned         bool
 	ReturnTime       time.Duration
 	MaxDeviation     float64
@@ -66,6 +67,8 @@ type TickerState struct {
 	LastTriggeredLevel float64
 	SplashTrigger      bool
 	TriggerTime        time.Time
+	LastRefUpdate      time.Time
+	CurrentTimeWindow  int
 	SplashDirection    string
 	SplashRecordID     int64
 

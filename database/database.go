@@ -14,11 +14,11 @@ var DB *sql.DB
 
 func InitDatabase(dataSourceName string) error {
 	const (
-		host     = ""
-		port     = ""
-		user     = ""
-		password = ""
-		dbname   = ""
+		host     = "45.12.151.252"
+		port     = 5432
+		user     = "remote_user"
+		password = "K9#fL2_vP81!sQx*mZ92_TrN"
+		dbname   = "splashtradingbot"
 	)
 
 	connStr := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=disable",
@@ -53,16 +53,26 @@ func InitDatabase(dataSourceName string) error {
         trigger_fair_price float8 not null,
         basis_gap float8 default 0.0,
         trigger_speed_sec float8,
-        volume_24h bigint not null,
+        volume_24h float8 not null,
         returned boolean default false,
         return_time float8 default 0,
         max_deviation float8 default 0,
-        prob_win float8 default 0
+        prob_win float8 default 0,
+		time_window smallint not null
 	);`
 
 	_, err = DB.Exec(createTablePSQL)
 	if err != nil {
 		return fmt.Errorf("failed to create splash_records table: %w", err)
+	}
+	createIndexPSQL := `
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_active_splash 
+		ON splash_records (symbol, trigger_level) 
+		WHERE (returned = false);`
+
+	_, err = DB.Exec(createIndexPSQL)
+	if err != nil {
+		log.Printf("Warning: Could not create unique index: %v", err)
 	}
 
 	var exists bool
@@ -83,7 +93,7 @@ func InitDatabase(dataSourceName string) error {
 	return nil
 }
 
-func GetContextStats(direction string, level int, volume int64, basisGap float64) (total int, wins int, err error) {
+func GetContextStats(direction string, level int, volume float64, basisGap float64, window int) (total int, wins int, err error) {
 	volMin, volMax := int64(float64(volume)*0.5), int64(float64(volume)*2)
 
 	gapMin, gapMax := basisGap-0.5, basisGap+0.5
@@ -97,9 +107,11 @@ func GetContextStats(direction string, level int, volume int64, basisGap float64
 		and trigger_level = $2
 		and volume_24h between $3 and $4
 		and basis_gap between $5 and $6
-		and (returned = true or trigger_time < (now() - (interval '5 minutes' + (trigger_level * interval '2 minutes'))));`
+		and time_window = $7
+		and (returned = true or trigger_time < (now() - (time_window * interval '1 minute')));`
 
-	err = DB.QueryRow(queryPSQL, direction, level, volMin, volMax, gapMin, gapMax).Scan(&total, &wins)
+	err = DB.QueryRow(queryPSQL, direction, level, volMin, volMax, gapMin, gapMax, window).Scan(&total, &wins)
+
 	if err != nil {
 		return 0, 0, fmt.Errorf("failed to select query context stats: %w", err)
 	}
@@ -112,8 +124,10 @@ func SaveSplashRecord(r models.SplashRecord, basisGap float64, speedSeconds floa
 		symbol, direction, trigger_level, trigger_time, 
         ref_last_price, ref_fair_price,
         trigger_last_price, trigger_fair_price, 
-        basis_gap, trigger_speed_sec, volume_24h, prob_win
-	) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) returning id;`
+        basis_gap, trigger_speed_sec, volume_24h, prob_win, time_window
+	) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) 
+	on conflict (symbol, trigger_level) where (returned = false) do nothing
+    returning id;`
 
 	var id int64
 	err := DB.QueryRow(
@@ -130,6 +144,7 @@ func SaveSplashRecord(r models.SplashRecord, basisGap float64, speedSeconds floa
 		speedSeconds,
 		r.Volume24h,
 		r.LongProbability,
+		r.TimeWindow,
 	).Scan(&id)
 	if err != nil {
 		return 0, fmt.Errorf("failed to insert splash record: %w", err)
@@ -168,15 +183,16 @@ func UpdateSplashRecord(r models.SplashRecord) error {
 	return nil
 }
 
-func UpdateSplashLevel(id int64, level int, lastPrice float64, fairPrice float64, volume24 int64, prob_win float64) error {
+func UpdateSplashLevel(id int64, level int, lastPrice float64, fairPrice float64, volume24 float64, prob_win float64, window int) error {
 	updatePSQL := `
 	update splash_records
 	set trigger_level = $1,
 		trigger_last_price = $2,
 		trigger_fair_price = $3,
 		volume_24h = $4,
-		prob_win = $5
-	where id = $6;`
+		prob_win = $5,
+		time_window = $6
+	where id = $7;`
 
 	_, err := DB.Exec(
 		updatePSQL,
@@ -198,7 +214,7 @@ func GetSplashRecordByID(id int64) (models.SplashRecord, error) {
         trigger_last_price, trigger_fair_price,
         trigger_time, volume_24h,
         returned, return_time, max_deviation,
-        prob_win
+        prob_win, time_window
 	from splash_records where id = $1;`
 
 	r := models.SplashRecord{}
@@ -210,7 +226,7 @@ func GetSplashRecordByID(id int64) (models.SplashRecord, error) {
 		&r.TriggerLastPrice, &r.TriggerFairPrice,
 		&r.TriggerTime, &r.Volume24h,
 		&r.Returned, &r.ReturnTime, &r.MaxDeviation,
-		&r.LongProbability,
+		&r.LongProbability, &r.TimeWindow,
 	)
 
 	if err != nil {
