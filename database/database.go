@@ -14,11 +14,11 @@ var DB *sql.DB
 
 func InitDatabase(dataSourceName string) error {
 	const (
-		host     = "45.12.151.252"
-		port     = 5432
-		user     = "remote_user"
-		password = "K9#fL2_vP81!sQx*mZ92_TrN"
-		dbname   = "splashtradingbot"
+		host     = ""
+		port     = ""
+		user     = ""
+		password = ""
+		dbname   = ""
 	)
 
 	connStr := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=disable",

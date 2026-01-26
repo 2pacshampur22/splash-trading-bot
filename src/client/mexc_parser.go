@@ -74,7 +74,7 @@ func FetchAllFuturesTickers() ([]models.SplashData, error) {
 
 func StartPolling(ctx context.Context) {
 	models.AppCtx = ctx
-	const postgresConnString = "host=localhost port=5432 user=postgres password=10072005Egor dbname=splashtradingbot sslmode=disable"
+	const postgresConnString = ""
 	database.InitDatabase(postgresConnString)
 
 	log.Println("Terminus Engine: Online")
