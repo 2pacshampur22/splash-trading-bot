@@ -2,36 +2,7 @@
 
 Splash Analytics — это высокопроизводительная инфраструктура для мониторинга микроструктуры рынка цифровых активов в реальном времени. Система использует ядро на языке Golang для минимизации задержек и нейросетевые модели (AI Agent) для фильтрации рыночного шума и детекции краткосрочных ценовых дисбалансов (Basis Gaps).
 
-# 🚀 Цели и задачи проекта
-
-**Выполнено (MVP Stage)**
-
-[x] High-Speed Core: Разработано многопоточное ядро на Go для агрегации данных через WebSocket API.
-[x] Distributed Storage: Реализована архитектура удаленного хранения данных на базе PostgreSQL (VPS) с защищенным доступом.
-[x] Multi-User Sync: Система поддерживает одновременную работу нескольких независимых узлов парсинга с синхронизацией в общую БД.
-[x] Permission System: Настроена ролевая модель доступа к схеме базы данных (PostgreSQL 15+).
-
-**В разработке (Current Phase)**
-
-[ ] Universal Engine: Переход на интерфейсную модель (Exchange Adapters) для поддержки Binance, Bybit, OKX.
-[ ] Web Dashboard: Интерактивная панель управления на React для визуализации UML-аналитики и управления параметрами парсинга.
-[ ] REST API: Создание сервисного слоя для связи бэкенда с фронтендом и внешними ИИ-службами.
-
-**Запланировано (Future AI Expansion)**
-
-[ ] AI-Agent Integration: Обучение модели классификации на собранном датасете для предсказания вероятности возврата цены (Mean Reversion).
-[ ] Auto-Tuning: Система автоматической подстройки trigger_level на основе текущей волатильности рынка.
-[ ] Alerting System: Модуль мгновенных уведомлений (Telegram/Web Push) о высоковероятных сигналах.
-
-# 🛠 Технологический стек
-
-Backend: Golang 1.21+ (Concurrency, Interfaces)
-Database: PostgreSQL 15 (TimescaleDB ready)
-Frontend: React + Tailwind CSS + Recharts
-Infrastructure: Docker, VPS (Debian 12), Systemd
-AI/ML: Python (Scikit-learn / TensorFlow) — в планах.
-
-# 📦 Установка и запуск (Разработка)
+# Установка и запуск (Разработка)
 
 **Требования**
 
@@ -55,7 +26,7 @@ go mod tidy
 ```
 ## Запуск приложения
 ```
-go run main.go
+wails dev
 ```
 
 ## Сборка исполняемого файла
@@ -72,10 +43,4 @@ chmod +x splash_bot
 GOOS=windows GOARCH=amd64 go build -o splash_bot.exe .
 ```
 
-# 📊 Архитектура системы (UML Concept)
-Проект строится по модульному принципу:
-Collector Layer: Собирает "сырые" данные с бирж.
-Analysis Layer: Вычисляет метрики (Gap, Speed, Volume).
-Intelligence Layer: ИИ-агент выносит вердикт о качестве сигнала.
-Presentation Layer: Веб-интерфейс отображает аналитику пользователю.
 

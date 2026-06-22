@@ -116,7 +116,7 @@ func SaveReturnBackRecord(recordID int64, returned bool, returnTime time.Duratio
 		log.Printf("Error saving return back info for record ID %d: %v", recordID, err)
 		return
 	}
-	record.Returned = true
+	record.Returned = returned
 	record.ReturnTime = returnTime
 	record.MaxDeviation = maxDeviation
 
